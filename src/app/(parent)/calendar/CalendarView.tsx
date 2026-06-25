@@ -69,7 +69,7 @@ export function CalendarView({
         )}
       </div>
       <p className="text-sm text-black/60 dark:text-white/60">
-        수업을 누르면 시간 변경·취소를 <span className="font-medium">요청</span>할 수 있어요. (선생님 승인 후 반영)
+        수업을 누르면 시간 변경·취소를 <span className="font-medium">요청</span>할 수 있어요.<br />(선생님 승인 후 반영)
       </p>
 
       <MonthCalendar
