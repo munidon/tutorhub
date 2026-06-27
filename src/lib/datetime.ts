@@ -33,6 +33,14 @@ export function kstDateKey(iso: string): string {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
+/** ISO(UTC) → KST 기준 한글 요일 한 글자("일"~"토") */
+export function kstWeekday(iso: string): string {
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: KST,
+    weekday: "short",
+  }).format(new Date(iso));
+}
+
 /** ISO(UTC) → KST 기준 "HH:MM" (24시간제) */
 export function kstTime(iso: string): string {
   const parts = new Intl.DateTimeFormat("en-US", {
