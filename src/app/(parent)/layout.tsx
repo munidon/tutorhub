@@ -32,7 +32,7 @@ export default async function ParentLayout({
         </nav>
         <div className="ml-auto flex items-center gap-3 text-sm">
           <span className="text-black/60 dark:text-white/60">
-            {profile.display_name ?? "학부모"}
+            {`${profile.display_name ?? "학부모"}님`}
           </span>
           <SignOutButton />
         </div>

@@ -55,9 +55,6 @@ export function BillingCard({
     <div className="space-y-3 rounded-lg border border-black/10 p-4 dark:border-white/15">
       <div className="flex items-center justify-between">
         <span className="font-semibold">{name}</span>
-        <span className="text-xs text-black/55 dark:text-white/55">
-          시급 {b.rate == null ? "미설정" : fmtWon(b.rate)}
-        </span>
       </div>
 
       <div className="grid grid-cols-2 gap-3">

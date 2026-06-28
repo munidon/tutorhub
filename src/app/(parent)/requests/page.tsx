@@ -91,7 +91,7 @@ export default async function ParentRequestsPage({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-2xl font-bold">내 요청 내역</h1>
+        <h1 className="text-2xl font-bold">요청 내역</h1>
         <div className="ml-auto flex items-center gap-1">
           <Link
             href={`/requests?ym=${ymStr(prevY, prevM)}`}
