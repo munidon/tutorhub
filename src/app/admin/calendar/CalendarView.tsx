@@ -42,6 +42,50 @@ function buildScheduleText(
     .join("\n");
 }
 
+/** ISO(UTC) → iCal UTC 타임스탬프 "YYYYMMDDTHHMMSSZ" */
+function toICSStamp(iso: string): string {
+  return new Date(iso)
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}Z$/, "Z");
+}
+
+/** iCal 텍스트 값 이스케이프(RFC 5545) */
+function icsEscape(s: string): string {
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\n/g, "\\n");
+}
+
+/** 해당 학생의 확정 수업(취소·요청 제외) 전체를 iCal(.ics) 문자열로 생성 */
+function buildICS(events: CalendarEvent[], studentName: string): string {
+  const stamp = toICSStamp(new Date().toISOString());
+  const summary = icsEscape(`${studentName} 과외`);
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//TutorHub//Calendar//KO",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+  ];
+  for (const e of events) {
+    if (e.pending || e.status !== "confirmed" || !e.endsAt) continue;
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${e.scheduleId ?? e.id}@tutorhub`,
+      `DTSTAMP:${stamp}`,
+      `DTSTART:${toICSStamp(e.startsAt)}`,
+      `DTEND:${toICSStamp(e.endsAt)}`,
+      `SUMMARY:${summary}`,
+      "END:VEVENT",
+    );
+  }
+  lines.push("END:VCALENDAR");
+  return lines.join("\r\n");
+}
+
 export function CalendarView({
   events,
   students,
@@ -72,6 +116,9 @@ export function CalendarView({
         : events.filter((e) => e.studentId === filter),
     [events, filter],
   );
+
+  const selectedName =
+    students.find((s) => s.id === filter)?.name ?? "학생";
 
   return (
     <div className="space-y-6">
@@ -109,7 +156,10 @@ export function CalendarView({
           </label>
 
           {filter !== "all" && (
-            <ExtractButton events={filtered} year={year} month={month} />
+            <>
+              <ExtractButton events={filtered} year={year} month={month} />
+              <ExportICSButton events={filtered} studentName={selectedName} />
+            </>
           )}
         </div>
 
@@ -175,6 +225,45 @@ function ExtractButton({
       className="rounded-md border border-black/15 px-3 py-2 text-sm font-medium hover:bg-black/5 dark:border-white/20 dark:hover:bg-white/10"
     >
       {copied ? "복사됨 ✓" : "일정 추출"}
+    </button>
+  );
+}
+
+/** 해당 학생의 모든 확정 수업을 .ics 파일로 내려받아 캘린더 앱에 가져오기 */
+function ExportICSButton({
+  events,
+  studentName,
+}: {
+  events: CalendarEvent[];
+  studentName: string;
+}) {
+  function download() {
+    const hasLesson = events.some(
+      (e) => !e.pending && e.status === "confirmed" && e.endsAt,
+    );
+    if (!hasLesson) {
+      window.alert("내보낼 일정이 없습니다.");
+      return;
+    }
+    const ics = buildICS(events, studentName);
+    const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${studentName}_과외.ics`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={download}
+      className="rounded-md border border-black/15 px-3 py-2 text-sm font-medium hover:bg-black/5 dark:border-white/20 dark:hover:bg-white/10"
+    >
+      캘린더 내보내기(.ics)
     </button>
   );
 }
