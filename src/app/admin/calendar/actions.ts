@@ -173,3 +173,33 @@ export async function deleteScheduleAction(
   revalidatePath("/admin");
   return { ok: true };
 }
+
+/**
+ * 학생별 캘린더 구독(webcal) 토큰을 발급/조회.
+ * 이미 있으면 그대로 반환, 없으면 추측 불가능한 비밀 토큰을 생성해 저장한다.
+ * 이 토큰이 담긴 /api/calendar/<token> 은 인증 없이 접근되므로 노출에 주의.
+ */
+export async function ensureCalendarTokenAction(
+  studentId: string,
+): Promise<{ token?: string; error?: string }> {
+  await requireRole("teacher");
+  if (!studentId) return { error: "학생 정보가 없습니다." };
+
+  const supabase = await createClient();
+  const { data: student, error: readErr } = await supabase
+    .from("students")
+    .select("calendar_token")
+    .eq("id", studentId)
+    .single();
+  if (readErr) return { error: `조회 실패: ${readErr.message}` };
+  if (student?.calendar_token) return { token: student.calendar_token };
+
+  const token = crypto.randomUUID().replace(/-/g, "");
+  const { error: writeErr } = await supabase
+    .from("students")
+    .update({ calendar_token: token })
+    .eq("id", studentId);
+  if (writeErr) return { error: `발급 실패: ${writeErr.message}` };
+
+  return { token };
+}

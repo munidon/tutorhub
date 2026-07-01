@@ -8,9 +8,13 @@ import {
 } from "@/components/MonthCalendar";
 import { currentKstYearMonth } from "@/lib/schedule";
 import { kstDateKey, kstTime, kstWeekday } from "@/lib/datetime";
+import { buildICS, type ICSEvent } from "@/lib/ics";
 import { ScheduleForm, type ScheduleTemplate } from "./ScheduleForm";
 
 type FormAction = (prev: ActionState, fd: FormData) => Promise<ActionState>;
+type SubscribeAction = (
+  studentId: string,
+) => Promise<{ token?: string; error?: string }>;
 
 const input =
   "rounded-md border border-black/15 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent";
@@ -42,48 +46,15 @@ function buildScheduleText(
     .join("\n");
 }
 
-/** ISO(UTC) → iCal UTC 타임스탬프 "YYYYMMDDTHHMMSSZ" */
-function toICSStamp(iso: string): string {
-  return new Date(iso)
-    .toISOString()
-    .replace(/[-:]/g, "")
-    .replace(/\.\d{3}Z$/, "Z");
-}
-
-/** iCal 텍스트 값 이스케이프(RFC 5545) */
-function icsEscape(s: string): string {
-  return s
-    .replace(/\\/g, "\\\\")
-    .replace(/;/g, "\\;")
-    .replace(/,/g, "\\,")
-    .replace(/\n/g, "\\n");
-}
-
-/** 해당 학생의 확정 수업(취소·요청 제외) 전체를 iCal(.ics) 문자열로 생성 */
-function buildICS(events: CalendarEvent[], studentName: string): string {
-  const stamp = toICSStamp(new Date().toISOString());
-  const summary = icsEscape(`${studentName} 과외`);
-  const lines = [
-    "BEGIN:VCALENDAR",
-    "VERSION:2.0",
-    "PRODID:-//TutorHub//Calendar//KO",
-    "CALSCALE:GREGORIAN",
-    "METHOD:PUBLISH",
-  ];
-  for (const e of events) {
-    if (e.pending || e.status !== "confirmed" || !e.endsAt) continue;
-    lines.push(
-      "BEGIN:VEVENT",
-      `UID:${e.scheduleId ?? e.id}@tutorhub`,
-      `DTSTAMP:${stamp}`,
-      `DTSTART:${toICSStamp(e.startsAt)}`,
-      `DTEND:${toICSStamp(e.endsAt)}`,
-      `SUMMARY:${summary}`,
-      "END:VEVENT",
-    );
-  }
-  lines.push("END:VCALENDAR");
-  return lines.join("\r\n");
+/** 다운로드용: 해당 학생의 확정 수업(취소·요청 오버레이 제외)을 ICSEvent 목록으로 */
+function toICSEvents(events: CalendarEvent[]): ICSEvent[] {
+  return events
+    .filter((e) => !e.pending && e.status === "confirmed" && e.endsAt)
+    .map((e) => ({
+      uid: e.scheduleId ?? e.id,
+      startsAt: e.startsAt,
+      endsAt: e.endsAt!,
+    }));
 }
 
 export function CalendarView({
@@ -94,6 +65,7 @@ export function CalendarView({
   cancelAction,
   deleteAction,
   settleAction,
+  subscribeAction,
 }: {
   events: CalendarEvent[];
   students: { id: string; name: string }[];
@@ -102,6 +74,7 @@ export function CalendarView({
   cancelAction: FormAction;
   deleteAction: FormAction;
   settleAction: FormAction;
+  subscribeAction: SubscribeAction;
 }) {
   const [filter, setFilter] = useState<string>("all");
   // 표시 월 — 수업 추가의 '템플릿 적용'이 이 월을 기준으로 날짜를 계산한다.
@@ -159,6 +132,11 @@ export function CalendarView({
             <>
               <ExtractButton events={filtered} year={year} month={month} />
               <ExportICSButton events={filtered} studentName={selectedName} />
+              <SubscribeButton
+                key={filter}
+                studentId={filter}
+                subscribeAction={subscribeAction}
+              />
             </>
           )}
         </div>
@@ -238,14 +216,12 @@ function ExportICSButton({
   studentName: string;
 }) {
   function download() {
-    const hasLesson = events.some(
-      (e) => !e.pending && e.status === "confirmed" && e.endsAt,
-    );
-    if (!hasLesson) {
+    const icsEvents = toICSEvents(events);
+    if (icsEvents.length === 0) {
       window.alert("내보낼 일정이 없습니다.");
       return;
     }
-    const ics = buildICS(events, studentName);
+    const ics = buildICS(icsEvents, `${studentName} 과외`);
     const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -265,5 +241,79 @@ function ExportICSButton({
     >
       캘린더 내보내기(.ics)
     </button>
+  );
+}
+
+/**
+ * 해당 학생의 구독(webcal) URL 발급 — 항상 최신 상태로 자동 동기화되는 방식.
+ * 클릭 시 비밀 토큰을 발급받아 webcal:// URL 을 만들고 클립보드에 복사한다.
+ */
+function SubscribeButton({
+  studentId,
+  subscribeAction,
+}: {
+  studentId: string;
+  subscribeAction: SubscribeAction;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function generate() {
+    setLoading(true);
+    setError(null);
+    const res = await subscribeAction(studentId);
+    setLoading(false);
+    if (res.error || !res.token) {
+      setError(res.error ?? "구독 URL 발급에 실패했습니다.");
+      return;
+    }
+    // webcal:// 스킴이면 맥·아이폰에서 클릭 시 캘린더 구독 화면이 바로 열린다.
+    const base = window.location.origin.replace(/^https?:/, "webcal:");
+    const full = `${base}/api/calendar/${res.token}`;
+    setUrl(full);
+    try {
+      await navigator.clipboard.writeText(full);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // 복사 실패해도 URL 은 아래에 노출되므로 무시
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={generate}
+        disabled={loading}
+        className="rounded-md border border-black/15 px-3 py-2 text-sm font-medium hover:bg-black/5 disabled:opacity-50 dark:border-white/20 dark:hover:bg-white/10"
+      >
+        {loading ? "발급 중…" : copied ? "URL 복사됨 ✓" : "구독 URL"}
+      </button>
+
+      {error && <p className="basis-full text-sm text-red-600">{error}</p>}
+
+      {url && (
+        <div className="basis-full space-y-1 rounded-md border border-black/10 p-3 text-sm dark:border-white/15">
+          <p className="text-black/60 dark:text-white/60">
+            맥 캘린더 앱에 구독하면 이후 일정이 바뀌어도 자동으로 동기화됩니다.{" "}
+            <a href={url} className="font-medium underline">
+              구독하기
+            </a>{" "}
+            를 누르거나, 아래 URL 을 <b>캘린더 › 파일 › 새로운 캘린더 구독</b> 에
+            붙여넣으세요.
+          </p>
+          <code className="block break-all rounded bg-black/5 px-2 py-1 text-xs dark:bg-white/10">
+            {url}
+          </code>
+          <p className="text-xs text-amber-600 dark:text-amber-500">
+            ⚠️ 이 주소를 아는 사람은 누구나 이 학생의 일정을 볼 수 있으니 공유에
+            주의하세요.
+          </p>
+        </div>
+      )}
+    </>
   );
 }

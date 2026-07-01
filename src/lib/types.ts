@@ -31,6 +31,8 @@ export interface Student {
   hourly_rate: number | null;
   lesson_duration: number | null;
   monthly_count: number | null;
+  // 캘린더 구독(webcal) 비밀 토큰 — 발급 전엔 null
+  calendar_token: string | null;
   created_at: string;
 }
 

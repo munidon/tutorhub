@@ -10,6 +10,7 @@ import {
   cancelScheduleAction,
   deleteScheduleAction,
   setScheduleSettledAction,
+  ensureCalendarTokenAction,
 } from "./actions";
 
 type ScheduleWithStudent = Schedule & {
@@ -118,6 +119,7 @@ export default async function AdminCalendarPage() {
         cancelAction={cancelScheduleAction}
         deleteAction={deleteScheduleAction}
         settleAction={setScheduleSettledAction}
+        subscribeAction={ensureCalendarTokenAction}
       />
     </div>
   );
