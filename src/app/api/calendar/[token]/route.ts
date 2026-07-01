@@ -16,36 +16,71 @@ export async function GET(
   const { token } = await ctx.params;
   if (!token) return new Response("Not found", { status: 404 });
 
-  // 인증 세션이 없으므로 service_role 로 조회 (해당 토큰의 학생만 노출).
+  // 인증 세션이 없으므로 service_role 로 조회 (해당 토큰 범위의 일정만 노출).
   const admin = createAdminClient();
+
+  // 1) 개별 학생 토큰
   const { data: student } = await admin
     .from("students")
     .select("id, name")
     .eq("calendar_token", token)
     .maybeSingle();
 
-  if (!student) return new Response("Not found", { status: 404 });
+  if (student) {
+    const { data: rows } = await admin
+      .from("schedules")
+      .select("id, starts_at, ends_at")
+      .eq("student_id", student.id)
+      .eq("status", "confirmed")
+      .order("starts_at", { ascending: true });
 
-  const { data: rows } = await admin
-    .from("schedules")
-    .select("id, starts_at, ends_at")
-    .eq("student_id", student.id)
-    .eq("status", "confirmed")
-    .order("starts_at", { ascending: true });
+    const events: ICSEvent[] = (rows ?? []).map((s) => ({
+      uid: s.id,
+      startsAt: s.starts_at,
+      endsAt: s.ends_at,
+    }));
+    return icsResponse(buildICS(events, `${student.name} 과외`), student.id);
+  }
 
-  const events: ICSEvent[] = (rows ?? []).map((s) => ({
-    uid: s.id,
-    startsAt: s.starts_at,
-    endsAt: s.ends_at,
-  }));
+  // 2) 전체 학생 토큰(settings) — 모든 확정 수업을 학생명으로 구분해 반환
+  const { data: settings } = await admin
+    .from("settings")
+    .select("id")
+    .eq("calendar_token", token)
+    .maybeSingle();
 
-  const ics = buildICS(events, `${student.name} 과외`);
+  if (settings) {
+    const { data: rows } = await admin
+      .from("schedules")
+      .select("id, starts_at, ends_at, students!inner(name)")
+      .eq("status", "confirmed")
+      .order("starts_at", { ascending: true });
 
+    const events: ICSEvent[] = (
+      (rows ?? []) as unknown as {
+        id: string;
+        starts_at: string;
+        ends_at: string;
+        students: { name: string };
+      }[]
+    ).map((s) => ({
+      uid: s.id,
+      startsAt: s.starts_at,
+      endsAt: s.ends_at,
+      summary: s.students.name,
+    }));
+    return icsResponse(buildICS(events, "과외 전체 일정"), "all");
+  }
+
+  return new Response("Not found", { status: 404 });
+}
+
+function icsResponse(ics: string, filenameKey: string) {
   return new Response(ics, {
     status: 200,
     headers: {
       "Content-Type": "text/calendar; charset=utf-8",
-      "Content-Disposition": `inline; filename="tutorhub-${student.id}.ics"`,
+      "Content-Disposition": `inline; filename="tutorhub-${filenameKey}.ics"`,
       // 캘린더 앱은 자체 주기로 폴링 — 과도한 캐시만 피한다.
       "Cache-Control": "public, max-age=1800",
     },

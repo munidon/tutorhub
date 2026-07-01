@@ -132,13 +132,13 @@ export function CalendarView({
             <>
               <ExtractButton events={filtered} year={year} month={month} />
               <ExportICSButton events={filtered} studentName={selectedName} />
-              <SubscribeButton
-                key={filter}
-                studentId={filter}
-                subscribeAction={subscribeAction}
-              />
             </>
           )}
+          <SubscribeButton
+            key={filter}
+            studentId={filter}
+            subscribeAction={subscribeAction}
+          />
         </div>
 
         <MonthCalendar
@@ -260,6 +260,8 @@ function SubscribeButton({
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const scopeLabel = studentId === "all" ? "전체 학생의" : "이 학생의";
+
   async function generate() {
     setLoading(true);
     setError(null);
@@ -309,7 +311,7 @@ function SubscribeButton({
             {url}
           </code>
           <p className="text-xs text-amber-600 dark:text-amber-500">
-            ⚠️ 이 주소를 아는 사람은 누구나 이 학생의 일정을 볼 수 있으니 공유에
+            ⚠️ 이 주소를 아는 사람은 누구나 {scopeLabel} 일정을 볼 수 있으니 공유에
             주의하세요.
           </p>
         </div>

@@ -175,7 +175,8 @@ export async function deleteScheduleAction(
 }
 
 /**
- * 학생별 캘린더 구독(webcal) 토큰을 발급/조회.
+ * 캘린더 구독(webcal) 토큰을 발급/조회. studentId === "all" 이면 전체 학생 토큰(settings),
+ * 그 외에는 해당 학생 토큰(students)을 대상으로 한다.
  * 이미 있으면 그대로 반환, 없으면 추측 불가능한 비밀 토큰을 생성해 저장한다.
  * 이 토큰이 담긴 /api/calendar/<token> 은 인증 없이 접근되므로 노출에 주의.
  */
@@ -186,6 +187,28 @@ export async function ensureCalendarTokenAction(
   if (!studentId) return { error: "학생 정보가 없습니다." };
 
   const supabase = await createClient();
+  const newToken = () => crypto.randomUUID().replace(/-/g, "");
+
+  // 전체 학생 구독 — settings 싱글톤에 토큰 저장
+  if (studentId === "all") {
+    const { data: settings, error: readErr } = await supabase
+      .from("settings")
+      .select("calendar_token")
+      .eq("id", 1)
+      .single();
+    if (readErr) return { error: `조회 실패: ${readErr.message}` };
+    if (settings?.calendar_token) return { token: settings.calendar_token };
+
+    const token = newToken();
+    const { error: writeErr } = await supabase
+      .from("settings")
+      .update({ calendar_token: token })
+      .eq("id", 1);
+    if (writeErr) return { error: `발급 실패: ${writeErr.message}` };
+    return { token };
+  }
+
+  // 개별 학생 구독 — students 행에 토큰 저장
   const { data: student, error: readErr } = await supabase
     .from("students")
     .select("calendar_token")
@@ -194,7 +217,7 @@ export async function ensureCalendarTokenAction(
   if (readErr) return { error: `조회 실패: ${readErr.message}` };
   if (student?.calendar_token) return { token: student.calendar_token };
 
-  const token = crypto.randomUUID().replace(/-/g, "");
+  const token = newToken();
   const { error: writeErr } = await supabase
     .from("students")
     .update({ calendar_token: token })

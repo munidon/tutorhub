@@ -77,6 +77,8 @@ export interface Settings {
   bank_name: string | null;
   account_number: string | null;
   account_holder: string | null;
+  // 전체 학생 캘린더 구독(webcal) 비밀 토큰 — 발급 전엔 null
+  calendar_token: string | null;
 }
 
 /** 계좌 정보(학부모 청구서 노출용, bank_info RPC 반환) */
