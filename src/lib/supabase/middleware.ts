@@ -2,7 +2,8 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 /** 로그인 없이 접근 가능한 경로 (정확 일치 또는 접두) */
-const PUBLIC_PATHS = ["/login", "/auth"];
+// /api/calendar: 캘린더 앱이 인증 없이 폴링하는 구독(webcal) 피드 — 비밀 토큰으로 보호
+const PUBLIC_PATHS = ["/login", "/auth", "/api/calendar"];
 
 function isPublic(pathname: string) {
   return PUBLIC_PATHS.some(
