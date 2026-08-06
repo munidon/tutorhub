@@ -56,10 +56,19 @@ export default async function AdminDashboard({
   const schedules = (scheduleRows ?? []) as unknown as BillingSchedule[];
   const paidSet = new Set((paymentRows ?? []).map((p) => p.student_id as string));
 
+  // 학생별로 미리 그룹핑 — 학생 수 × 전체 일정 반복 순회 방지
+  const schedulesByStudent = new Map<string, BillingSchedule[]>();
+  for (const s of schedules) {
+    (
+      schedulesByStudent.get(s.student_id) ??
+      schedulesByStudent.set(s.student_id, []).get(s.student_id)!
+    ).push(s);
+  }
+
   const billings = students.map((st) => ({
     student: st,
     billing: computeBilling(
-      schedules.filter((s) => s.student_id === st.id),
+      schedulesByStudent.get(st.id) ?? [],
       st.hourly_rate,
       year,
       month,

@@ -101,6 +101,19 @@ export function MonthCalendar({
     return map;
   }, [events]);
 
+  // 칩 시간 라벨은 이벤트당 한 번만 계산 (렌더마다 kstTime 반복 방지)
+  const timeById = useMemo(() => {
+    const map = new Map<string, { start: string; range: string }>();
+    for (const e of events) {
+      const start = kstTime(e.startsAt);
+      map.set(e.id, {
+        start,
+        range: e.endsAt ? `${start}~${kstTime(e.endsAt)}` : start,
+      });
+    }
+    return map;
+  }, [events]);
+
   const firstDow = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const totalCells = Math.ceil((firstDow + daysInMonth) / 7) * 7;
@@ -196,12 +209,10 @@ export function MonthCalendar({
               <div className="mt-0.5 space-y-0.5">
                 {dayEvents.map((e) => {
                   const clickable = interactive && !e.pending && e.status === "confirmed";
-                  const startTime = kstTime(e.startsAt);
-                  const timeRange = e.endsAt
-                    ? `${startTime}~${kstTime(e.endsAt)}`
-                    : startTime;
+                  const times = timeById.get(e.id)!;
+                  const timeRange = times.range;
                   // 기본은 시작 시간만(좁은 모바일 칸 잘림 방지) — showEndTime 이면 시작~종료
-                  const chipTime = showEndTime ? timeRange : startTime;
+                  const chipTime = showEndTime ? times.range : times.start;
                   return (
                     <button
                       key={e.id}
