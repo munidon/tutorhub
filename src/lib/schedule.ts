@@ -46,7 +46,7 @@ export function categoryTag(
 
 const HOUR_MS = 3_600_000;
 
-type BillingInput = Pick<
+export type BillingInput = Pick<
   Schedule,
   | "starts_at"
   | "ends_at"
@@ -57,6 +57,9 @@ type BillingInput = Pick<
   | "prev_ends"
   | "settled"
 >;
+
+/** 정산 계산에 필요한 최소 스키마 — 전체 Schedule 대신 클라이언트로 보낼 때 사용 */
+export type BillingSchedule = BillingInput & { student_id: string };
 
 function durHours(start: string, end: string): number {
   return (new Date(end).getTime() - new Date(start).getTime()) / HOUR_MS;

@@ -39,22 +39,23 @@ export async function updateSession(request: NextRequest) {
     },
   );
 
-  // getUser() 가 세션을 갱신한다. getUser/getClaims 호출 사이에 다른 로직을 넣지 말 것.
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // getClaims() 는 JWT 를 로컬(JWKS)로 검증한다 — Auth 서버 왕복 없음.
+  // 만료 임박 시에는 세션 refresh 도 수행한다. 호출 전에 다른 로직을 넣지 말 것.
+  // (레거시 HS256 서명 키 프로젝트에서는 서버 검증으로 폴백되므로 비대칭 키 권장)
+  const { data, error } = await supabase.auth.getClaims();
+  const claims = error ? null : (data?.claims ?? null);
 
   const { pathname } = request.nextUrl;
 
   // 미인증 + 보호된 경로 → 로그인으로
-  if (!user && !isPublic(pathname)) {
+  if (!claims && !isPublic(pathname)) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
   // 인증됨 + 로그인 페이지 → 홈(역할별 분기는 / 에서)
-  if (user && pathname === "/login") {
+  if (claims && pathname === "/login") {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);

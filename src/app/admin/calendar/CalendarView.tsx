@@ -1,13 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   MonthCalendar,
   type CalendarEvent,
   type ActionState,
 } from "@/components/MonthCalendar";
-import { currentKstYearMonth } from "@/lib/schedule";
 import { kstDateKey, kstTime, kstWeekday } from "@/lib/datetime";
+import { ymKey } from "@/lib/month";
 import { buildICS, type ICSEvent } from "@/lib/ics";
 import { ScheduleForm, type ScheduleTemplate } from "./ScheduleForm";
 
@@ -61,6 +62,10 @@ export function CalendarView({
   events,
   students,
   templates,
+  initialYear,
+  initialMonth,
+  viewMinYm,
+  viewMaxYm,
   changeAction,
   cancelAction,
   deleteAction,
@@ -70,17 +75,33 @@ export function CalendarView({
   events: CalendarEvent[];
   students: { id: string; name: string }[];
   templates: ScheduleTemplate[];
+  initialYear: number;
+  initialMonth: number;
+  viewMinYm: string;
+  viewMaxYm: string;
   changeAction: FormAction;
   cancelAction: FormAction;
   deleteAction: FormAction;
   settleAction: FormAction;
   subscribeAction: SubscribeAction;
 }) {
+  const router = useRouter();
   const [filter, setFilter] = useState<string>("all");
   // 표시 월 — 수업 추가의 '템플릿 적용'이 이 월을 기준으로 날짜를 계산한다.
-  const [[year, month], setYM] = useState<[number, number]>(() =>
-    currentKstYearMonth(),
-  );
+  const [[year, month], setYM] = useState<[number, number]>([
+    initialYear,
+    initialMonth,
+  ]);
+
+  function handleMonthChange(y: number, m: number) {
+    const key = ymKey(y, m);
+    if (key < viewMinYm || key > viewMaxYm) {
+      // 로드된 창 밖 → 해당 월 중심으로 서버에서 다시 조회
+      router.push(`/admin/calendar?ym=${key}`);
+      return;
+    }
+    setYM([y, m]);
+  }
 
   const filtered = useMemo(
     () =>
@@ -147,7 +168,7 @@ export function CalendarView({
           showEndTime
           year={year}
           month={month}
-          onMonthChange={(y, m) => setYM([y, m])}
+          onMonthChange={handleMonthChange}
           changeAction={changeAction}
           cancelAction={cancelAction}
           deleteAction={deleteAction}

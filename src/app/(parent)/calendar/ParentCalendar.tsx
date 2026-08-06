@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import type { Student, Schedule, BankInfo } from "@/lib/types";
+import { useRouter } from "next/navigation";
+import type { Student, BankInfo } from "@/lib/types";
 import type { CalendarEvent, ActionState } from "@/components/MonthCalendar";
-import { currentKstYearMonth } from "@/lib/schedule";
+import type { BillingSchedule } from "@/lib/schedule";
+import { ymKey } from "@/lib/month";
 import { CalendarView } from "./CalendarView";
 import { AddRequestForm } from "./AddRequestForm";
 import { ParentBilling } from "./ParentBilling";
@@ -13,28 +15,49 @@ type FormAction = (prev: ActionState, fd: FormData) => Promise<ActionState>;
 /**
  * 학부모 캘린더 + 청구서를 하나의 표시 월(year/month) 상태로 묶는다.
  * 달력을 넘기면 아래 '수업료 안내'도 같은 월로 다시 계산된다.
+ * 조회 창(viewMinYm~viewMaxYm) 밖으로 이동하면 ?ym= 서버 네비게이션으로 재조회.
  */
 export function ParentCalendar({
   events,
   students,
-  schedules,
+  billingSchedules,
   payments,
   bank,
+  initialYear,
+  initialMonth,
+  viewMinYm,
+  viewMaxYm,
   changeAction,
   cancelAction,
 }: {
   events: CalendarEvent[];
   students: Student[];
-  schedules: Schedule[];
+  billingSchedules: BillingSchedule[];
   payments: { student_id: string; ym: string }[];
   bank: BankInfo | null;
+  initialYear: number;
+  initialMonth: number;
+  viewMinYm: string;
+  viewMaxYm: string;
   changeAction: FormAction;
   cancelAction: FormAction;
 }) {
-  const [[year, month], setYM] = useState<[number, number]>(() =>
-    currentKstYearMonth(),
-  );
+  const router = useRouter();
+  const [[year, month], setYM] = useState<[number, number]>([
+    initialYear,
+    initialMonth,
+  ]);
   const childStudents = students.map((s) => ({ id: s.id, name: s.name }));
+
+  function handleMonthChange(y: number, m: number) {
+    const key = ymKey(y, m);
+    if (key < viewMinYm || key > viewMaxYm) {
+      // 로드된 창 밖 → 해당 월 중심으로 서버에서 다시 조회
+      router.push(`/calendar?ym=${key}`);
+      return;
+    }
+    setYM([y, m]);
+  }
 
   return (
     <div className="space-y-6">
@@ -45,7 +68,7 @@ export function ParentCalendar({
         cancelAction={cancelAction}
         year={year}
         month={month}
-        onMonthChange={(y, m) => setYM([y, m])}
+        onMonthChange={handleMonthChange}
       />
 
       <details className="rounded-lg border border-black/10 dark:border-white/15">
@@ -61,7 +84,7 @@ export function ParentCalendar({
         year={year}
         month={month}
         students={students}
-        schedules={schedules}
+        schedules={billingSchedules}
         payments={payments}
         bank={bank}
       />

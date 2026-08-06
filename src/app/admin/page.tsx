@@ -1,12 +1,18 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import type { Student, Schedule } from "@/lib/types";
-import { computeBilling, currentKstYearMonth } from "@/lib/schedule";
+import type { Student } from "@/lib/types";
+import {
+  computeBilling,
+  currentKstYearMonth,
+  type BillingSchedule,
+} from "@/lib/schedule";
+import { kstMonthStartISO, ymKey as ymStr } from "@/lib/month";
 import { BillingCard } from "@/components/BillingCard";
 import { PaymentToggle } from "./PaymentToggle";
 
-const pad = (n: number) => String(n).padStart(2, "0");
-const ymStr = (y: number, m: number) => `${y}-${pad(m)}`;
+// 정산 계산(computeBilling)에 필요한 컬럼만 조회
+const BILLING_COLS =
+  "student_id, starts_at, ends_at, status, category, base_category, prev_starts, prev_ends, settled";
 
 export default async function AdminDashboard({
   searchParams,
@@ -15,16 +21,9 @@ export default async function AdminDashboard({
 }) {
   const supabase = await createClient();
 
-  const [{ data: studentRows }, { data: scheduleRows }] = await Promise.all([
-    supabase.from("students").select("*").eq("active", true).order("name"),
-    supabase.from("schedules").select("*"),
-  ]);
-  const students = (studentRows ?? []) as Student[];
-  const schedules = (scheduleRows ?? []) as Schedule[];
-
   const [curY, curM] = currentKstYearMonth();
 
-  // 선택 월 (?ym=YYYY-MM), 기본은 이번달
+  // 선택 월 (?ym=YYYY-MM), 기본은 이번달 — 쿼리 배치 전에 먼저 확정
   const { ym } = await searchParams;
   let year = curY;
   let month = curM;
@@ -39,19 +38,37 @@ export default async function AdminDashboard({
 
   const [prevY, prevM] = month === 1 ? [year - 1, 12] : [year, month - 1];
   const [nextY, nextM] = month === 12 ? [year + 1, 1] : [year, month + 1];
-
-  // 선택 월 입금 확인 현황
   const monthYm = ymStr(year, month);
-  const { data: paymentRows } = await supabase
-    .from("payments")
-    .select("student_id")
-    .eq("ym", monthYm);
+
+  // 서로 독립적인 조회 — 병렬 실행 (입금 확인은 선택 월 기준)
+  // 정산은 선택 월 + 전월(이월 계산)만 필요하므로 그 범위만 조회
+  const [{ data: studentRows }, { data: scheduleRows }, { data: paymentRows }] =
+    await Promise.all([
+      supabase.from("students").select("*").eq("active", true).order("name"),
+      supabase
+        .from("schedules")
+        .select(BILLING_COLS)
+        .gte("starts_at", kstMonthStartISO(prevY, prevM))
+        .lt("starts_at", kstMonthStartISO(nextY, nextM)),
+      supabase.from("payments").select("student_id").eq("ym", monthYm),
+    ]);
+  const students = (studentRows ?? []) as Student[];
+  const schedules = (scheduleRows ?? []) as unknown as BillingSchedule[];
   const paidSet = new Set((paymentRows ?? []).map((p) => p.student_id as string));
+
+  // 학생별로 미리 그룹핑 — 학생 수 × 전체 일정 반복 순회 방지
+  const schedulesByStudent = new Map<string, BillingSchedule[]>();
+  for (const s of schedules) {
+    (
+      schedulesByStudent.get(s.student_id) ??
+      schedulesByStudent.set(s.student_id, []).get(s.student_id)!
+    ).push(s);
+  }
 
   const billings = students.map((st) => ({
     student: st,
     billing: computeBilling(
-      schedules.filter((s) => s.student_id === st.id),
+      schedulesByStudent.get(st.id) ?? [],
       st.hourly_rate,
       year,
       month,

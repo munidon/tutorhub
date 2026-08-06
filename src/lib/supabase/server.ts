@@ -1,11 +1,13 @@
+import { cache } from "react";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 /**
  * 서버 컴포넌트 / 서버 액션 / 라우트 핸들러용 Supabase 클라이언트.
  * 요청 쿠키의 사용자 세션으로 동작하며 RLS 가 적용된다.
+ * React.cache 로 같은 요청 안에서는 레이아웃/페이지가 클라이언트 1개를 공유한다.
  */
-export async function createClient() {
+export const createClient = cache(async () => {
   const cookieStore = await cookies();
 
   return createServerClient(
@@ -29,4 +31,4 @@ export async function createClient() {
       },
     },
   );
-}
+});

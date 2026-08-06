@@ -1,7 +1,8 @@
 "use client";
 
-import type { Student, Schedule, BankInfo } from "@/lib/types";
-import { computeBilling } from "@/lib/schedule";
+import { useMemo } from "react";
+import type { Student, BankInfo } from "@/lib/types";
+import { computeBilling, type BillingSchedule } from "@/lib/schedule";
 import { BillingCard } from "@/components/BillingCard";
 import { CopyAccountButton } from "@/components/CopyAccountButton";
 
@@ -19,7 +20,7 @@ export function ParentBilling({
   year: number;
   month: number;
   students: Student[];
-  schedules: Schedule[];
+  schedules: BillingSchedule[];
   payments: { student_id: string; ym: string }[];
   bank: BankInfo | null;
 }) {
@@ -29,15 +30,20 @@ export function ParentBilling({
   );
   const hasBank = !!(bank && (bank.account_number || bank.bank_name));
 
-  const billings = students.map((st) => ({
-    student: st,
-    billing: computeBilling(
-      schedules.filter((s) => s.student_id === st.id),
-      st.hourly_rate,
-      year,
-      month,
-    ),
-  }));
+  // 전체 일정을 학생별로 두 번 순회하는 계산 — 월/데이터가 바뀔 때만 재실행
+  const billings = useMemo(
+    () =>
+      students.map((st) => ({
+        student: st,
+        billing: computeBilling(
+          schedules.filter((s) => s.student_id === st.id),
+          st.hourly_rate,
+          year,
+          month,
+        ),
+      })),
+    [students, schedules, year, month],
+  );
 
   return (
     <section className="space-y-2">
