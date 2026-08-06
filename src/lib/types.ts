@@ -18,6 +18,8 @@ export interface Profile {
   id: string;
   role: Role;
   display_name: string | null;
+  /** 로그인 이메일 (handle_new_user 트리거가 auth.users 에서 복사) */
+  email: string | null;
   created_at: string;
 }
 
