@@ -1,8 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
-import type { Schedule, Student, ChangeRequest, BankInfo } from "@/lib/types";
+import type { Student, ChangeRequest, BankInfo } from "@/lib/types";
 import { requestChangeAction, requestCancelAction } from "../actions";
 import type { CalendarEvent } from "@/components/MonthCalendar";
-import { categoryTag } from "@/lib/schedule";
+import {
+  categoryTag,
+  currentKstYearMonth,
+  type BillingSchedule,
+} from "@/lib/schedule";
+import { calendarWindow, parseYm } from "@/lib/month";
 import { ParentCalendar } from "./ParentCalendar";
 
 const REQ_LABEL: Record<ChangeRequest["type"], string> = {
@@ -11,8 +16,27 @@ const REQ_LABEL: Record<ChangeRequest["type"], string> = {
   cancel: "취소요청",
 };
 
-export default async function ParentCalendarPage() {
+// 화면(달력·정산)에 실제로 쓰는 컬럼만 조회 — RSC 페이로드 축소
+const SCHEDULE_COLS =
+  "id, student_id, starts_at, ends_at, status, category, base_category, prev_starts, prev_ends, settled";
+type ScheduleRow = BillingSchedule & { id: string };
+
+// 요청 칩의 기준 시각은 원본 수업을 임베드해 조회 (조회 창과 무관하게 정확)
+type RequestWithBase = ChangeRequest & {
+  schedules: { starts_at: string; ends_at: string } | null;
+};
+
+export default async function ParentCalendarPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ ym?: string }>;
+}) {
   const supabase = await createClient();
+
+  // 중심 월(?ym=, 기본 이번달) 주변 창만 조회 — 창 안 월 이동은 클라이언트에서 즉시
+  const [year, month] =
+    parseYm((await searchParams).ym) ?? currentKstYearMonth();
+  const win = calendarWindow(year, month);
 
   // 서로 독립적인 조회 — 병렬 실행 (RLS 로 본인 자녀만 조회됨)
   const [
@@ -23,24 +47,29 @@ export default async function ParentCalendarPage() {
     { data: paymentRows },
   ] = await Promise.all([
     supabase.from("students").select("*").eq("active", true),
-    // 달력에는 과거 일정도 표시하므로 전체 조회
-    supabase.from("schedules").select("*").order("starts_at", { ascending: true }),
-    supabase.from("requests").select("*").eq("status", "pending"),
-    // 계좌 안내(민감정보 제외 RPC) + 입금 확인 현황 전체(월별 전환에 대비해 전부)
+    supabase
+      .from("schedules")
+      .select(SCHEDULE_COLS)
+      .gte("starts_at", win.fetchStartISO)
+      .lt("starts_at", win.fetchEndISO)
+      .order("starts_at", { ascending: true }),
+    supabase
+      .from("requests")
+      .select("*, schedules(starts_at, ends_at)")
+      .eq("status", "pending"),
+    // 계좌 안내(민감정보 제외 RPC) + 창 안 월들의 입금 확인 현황
     supabase.rpc("bank_info"),
-    supabase.from("payments").select("student_id, ym"),
+    supabase.from("payments").select("student_id, ym").in("ym", win.viewYms),
   ]);
   const students = (studentRows ?? []) as Student[];
-  const schedules = (scheduleRows ?? []) as Schedule[];
-  const pendingReqs = (reqRows ?? []) as ChangeRequest[];
+  const schedules = (scheduleRows ?? []) as unknown as ScheduleRow[];
+  const pendingReqs = (reqRows ?? []) as unknown as RequestWithBase[];
   const bank = ((bankRows ?? [])[0] ?? null) as BankInfo | null;
   const payments = (paymentRows ?? []) as { student_id: string; ym: string }[];
 
-  const studentOf = (id: string) => students.find((s) => s.id === id);
-  const nameOf = (id: string) => studentOf(id)?.name ?? "자녀";
-  const colorOf = (id: string) => studentOf(id)?.color ?? "#3b82f6";
-
-  const scheduleById = new Map(schedules.map((s) => [s.id, s]));
+  const studentById = new Map(students.map((s) => [s.id, s]));
+  const nameOf = (id: string) => studentById.get(id)?.name ?? "자녀";
+  const colorOf = (id: string) => studentById.get(id)?.color ?? "#3b82f6";
 
   const confirmedEvents: CalendarEvent[] = schedules.map((s) => ({
     id: s.id,
@@ -56,7 +85,7 @@ export default async function ParentCalendarPage() {
   }));
 
   const pendingEvents: CalendarEvent[] = pendingReqs.map((r) => {
-    const base = r.schedule_id ? scheduleById.get(r.schedule_id) : undefined;
+    const base = r.schedules;
     const startsAt =
       r.type === "cancel"
         ? (base?.starts_at ?? r.created_at)
@@ -81,11 +110,17 @@ export default async function ParentCalendarPage() {
 
   return (
     <ParentCalendar
+      // 중심 월이 바뀌면 리마운트해 표시 월 상태를 새 창에 맞춘다
+      key={`${year}-${month}`}
       events={events}
       students={students}
-      schedules={schedules}
+      billingSchedules={schedules}
       payments={payments}
       bank={bank}
+      initialYear={year}
+      initialMonth={month}
+      viewMinYm={win.viewMinYm}
+      viewMaxYm={win.viewMaxYm}
       changeAction={requestChangeAction}
       cancelAction={requestCancelAction}
     />

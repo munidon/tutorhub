@@ -1,7 +1,7 @@
 "use client";
 
-import type { Student, Schedule, BankInfo } from "@/lib/types";
-import { computeBilling } from "@/lib/schedule";
+import type { Student, BankInfo } from "@/lib/types";
+import { computeBilling, type BillingSchedule } from "@/lib/schedule";
 import { BillingCard } from "@/components/BillingCard";
 import { CopyAccountButton } from "@/components/CopyAccountButton";
 
@@ -19,7 +19,7 @@ export function ParentBilling({
   year: number;
   month: number;
   students: Student[];
-  schedules: Schedule[];
+  schedules: BillingSchedule[];
   payments: { student_id: string; ym: string }[];
   bank: BankInfo | null;
 }) {
