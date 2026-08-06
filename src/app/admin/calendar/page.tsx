@@ -28,30 +28,30 @@ const REQ_LABEL: Record<ChangeRequest["type"], string> = {
 
 export default async function AdminCalendarPage() {
   const supabase = await createClient();
-  const { data } = await supabase
-    .from("schedules")
-    .select("*, students(name, color)")
-    .order("starts_at", { ascending: true });
+
+  // 서로 독립적인 조회 — 병렬 실행으로 대기 시간을 최대 1회 왕복으로 줄임
+  const [
+    { data },
+    { data: studentRows },
+    { data: reqRows },
+    { data: tplRows },
+  ] = await Promise.all([
+    supabase
+      .from("schedules")
+      .select("*, students(name, color)")
+      .order("starts_at", { ascending: true }),
+    supabase.from("students").select("id, name").eq("active", true).order("name"),
+    supabase
+      .from("requests")
+      .select("*, students(name, color)")
+      .eq("status", "pending"),
+    // 반복 템플릿 → '수업 추가' 적용 목록 (활성 학생 것만)
+    supabase.from("recurrence_templates").select("*"),
+  ]);
 
   const schedules = (data ?? []) as ScheduleWithStudent[];
-
-  const { data: studentRows } = await supabase
-    .from("students")
-    .select("id, name")
-    .eq("active", true)
-    .order("name");
   const students = (studentRows ?? []) as { id: string; name: string }[];
-
-  const { data: reqRows } = await supabase
-    .from("requests")
-    .select("*, students(name, color)")
-    .eq("status", "pending");
   const pendingReqs = (reqRows ?? []) as RequestWithStudent[];
-
-  // 반복 템플릿 → '수업 추가' 적용 목록 (활성 학생 것만)
-  const { data: tplRows } = await supabase
-    .from("recurrence_templates")
-    .select("*");
   const nameById = new Map(students.map((s) => [s.id, s.name]));
   const templates: ScheduleTemplate[] = ((tplRows ?? []) as RecurrenceTemplate[])
     .filter((t) => nameById.has(t.student_id))

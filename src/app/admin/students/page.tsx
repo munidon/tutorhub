@@ -9,21 +9,25 @@ import { ResetPasswordButton } from "./ResetPasswordButton";
 export default async function AdminStudentsPage() {
   const supabase = await createClient();
 
-  const [{ data: parentRows }, { data: studentRows }] = await Promise.all([
-    supabase
-      .from("profiles")
-      .select("*")
-      .eq("role", "parent")
-      .order("created_at", { ascending: true }),
-    supabase.from("students").select("*").order("created_at", { ascending: true }),
-  ]);
+  // 학부모 로그인 아이디(이메일) 매핑 — profiles 엔 없으므로 admin API 로 조회
+  const admin = createAdminClient();
+
+  const [{ data: parentRows }, { data: studentRows }, { data: userList }] =
+    await Promise.all([
+      supabase
+        .from("profiles")
+        .select("*")
+        .eq("role", "parent")
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("students")
+        .select("*")
+        .order("created_at", { ascending: true }),
+      admin.auth.admin.listUsers({ perPage: 1000 }),
+    ]);
 
   const parents = (parentRows ?? []) as Profile[];
   const students = (studentRows ?? []) as Student[];
-
-  // 학부모 로그인 아이디(이메일) 매핑 — profiles 엔 없으므로 admin API 로 조회
-  const admin = createAdminClient();
-  const { data: userList } = await admin.auth.admin.listUsers({ perPage: 1000 });
   const emailById = new Map(
     (userList?.users ?? []).map((u) => [u.id, u.email ?? ""]),
   );

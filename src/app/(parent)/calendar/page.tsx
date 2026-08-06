@@ -14,31 +14,25 @@ const REQ_LABEL: Record<ChangeRequest["type"], string> = {
 export default async function ParentCalendarPage() {
   const supabase = await createClient();
 
-  // RLS 로 본인 자녀만 조회됨
-  const { data: studentRows } = await supabase
-    .from("students")
-    .select("*")
-    .eq("active", true);
-  const students = (studentRows ?? []) as Student[];
-
-  // 달력에는 과거 일정도 표시하므로 전체 조회 (RLS 로 본인 자녀만)
-  const { data: scheduleRows } = await supabase
-    .from("schedules")
-    .select("*")
-    .order("starts_at", { ascending: true });
-  const schedules = (scheduleRows ?? []) as Schedule[];
-
-  const { data: reqRows } = await supabase
-    .from("requests")
-    .select("*")
-    .eq("status", "pending");
-  const pendingReqs = (reqRows ?? []) as ChangeRequest[];
-
-  // 계좌 안내(민감정보 제외 RPC) + 입금 확인 현황 전체(월별 전환에 대비해 전부)
-  const [{ data: bankRows }, { data: paymentRows }] = await Promise.all([
+  // 서로 독립적인 조회 — 병렬 실행 (RLS 로 본인 자녀만 조회됨)
+  const [
+    { data: studentRows },
+    { data: scheduleRows },
+    { data: reqRows },
+    { data: bankRows },
+    { data: paymentRows },
+  ] = await Promise.all([
+    supabase.from("students").select("*").eq("active", true),
+    // 달력에는 과거 일정도 표시하므로 전체 조회
+    supabase.from("schedules").select("*").order("starts_at", { ascending: true }),
+    supabase.from("requests").select("*").eq("status", "pending"),
+    // 계좌 안내(민감정보 제외 RPC) + 입금 확인 현황 전체(월별 전환에 대비해 전부)
     supabase.rpc("bank_info"),
     supabase.from("payments").select("student_id, ym"),
   ]);
+  const students = (studentRows ?? []) as Student[];
+  const schedules = (scheduleRows ?? []) as Schedule[];
+  const pendingReqs = (reqRows ?? []) as ChangeRequest[];
   const bank = ((bankRows ?? [])[0] ?? null) as BankInfo | null;
   const payments = (paymentRows ?? []) as { student_id: string; ym: string }[];
 

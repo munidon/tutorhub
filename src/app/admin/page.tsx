@@ -15,16 +15,9 @@ export default async function AdminDashboard({
 }) {
   const supabase = await createClient();
 
-  const [{ data: studentRows }, { data: scheduleRows }] = await Promise.all([
-    supabase.from("students").select("*").eq("active", true).order("name"),
-    supabase.from("schedules").select("*"),
-  ]);
-  const students = (studentRows ?? []) as Student[];
-  const schedules = (scheduleRows ?? []) as Schedule[];
-
   const [curY, curM] = currentKstYearMonth();
 
-  // 선택 월 (?ym=YYYY-MM), 기본은 이번달
+  // 선택 월 (?ym=YYYY-MM), 기본은 이번달 — 쿼리 배치 전에 먼저 확정
   const { ym } = await searchParams;
   let year = curY;
   let month = curM;
@@ -39,13 +32,17 @@ export default async function AdminDashboard({
 
   const [prevY, prevM] = month === 1 ? [year - 1, 12] : [year, month - 1];
   const [nextY, nextM] = month === 12 ? [year + 1, 1] : [year, month + 1];
-
-  // 선택 월 입금 확인 현황
   const monthYm = ymStr(year, month);
-  const { data: paymentRows } = await supabase
-    .from("payments")
-    .select("student_id")
-    .eq("ym", monthYm);
+
+  // 서로 독립적인 조회 — 병렬 실행 (입금 확인은 선택 월 기준)
+  const [{ data: studentRows }, { data: scheduleRows }, { data: paymentRows }] =
+    await Promise.all([
+      supabase.from("students").select("*").eq("active", true).order("name"),
+      supabase.from("schedules").select("*"),
+      supabase.from("payments").select("student_id").eq("ym", monthYm),
+    ]);
+  const students = (studentRows ?? []) as Student[];
+  const schedules = (scheduleRows ?? []) as Schedule[];
   const paidSet = new Set((paymentRows ?? []).map((p) => p.student_id as string));
 
   const billings = students.map((st) => ({
