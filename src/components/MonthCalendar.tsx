@@ -70,7 +70,7 @@ export function MonthCalendar({
   month?: number;
   onMonthChange?: (year: number, month: number) => void;
 }) {
-  const today = useMemo(todayParts, []);
+  const today = useMemo(() => todayParts(), []);
   const controlled =
     yearProp != null && monthProp != null && onMonthChange != null;
   const [iYear, setIYear] = useState(today.y);
@@ -134,8 +134,13 @@ export function MonthCalendar({
   function go(delta: number) {
     let m = month + delta;
     let y = year;
-    if (m < 1) (m = 12), (y -= 1);
-    else if (m > 12) (m = 1), (y += 1);
+    if (m < 1) {
+      m = 12;
+      y -= 1;
+    } else if (m > 12) {
+      m = 1;
+      y += 1;
+    }
     setYearMonth(y, m);
   }
 
