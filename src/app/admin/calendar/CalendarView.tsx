@@ -9,7 +9,6 @@ import {
 } from "@/components/MonthCalendar";
 import { kstDateKey, kstTime, kstWeekday } from "@/lib/datetime";
 import { ymKey } from "@/lib/month";
-import { buildICS, type ICSEvent } from "@/lib/ics";
 import { ScheduleForm, type ScheduleTemplate } from "./ScheduleForm";
 
 type FormAction = (prev: ActionState, fd: FormData) => Promise<ActionState>;
@@ -45,17 +44,6 @@ function buildScheduleText(
       return `${m}/${d}(${kstWeekday(e.startsAt)}): ${time}`;
     })
     .join("\n");
-}
-
-/** 다운로드용: 해당 학생의 확정 수업(취소·요청 오버레이 제외)을 ICSEvent 목록으로 */
-function toICSEvents(events: CalendarEvent[]): ICSEvent[] {
-  return events
-    .filter((e) => !e.pending && e.status === "confirmed" && e.endsAt)
-    .map((e) => ({
-      uid: e.scheduleId ?? e.id,
-      startsAt: e.startsAt,
-      endsAt: e.endsAt!,
-    }));
 }
 
 export function CalendarView({
@@ -111,9 +99,6 @@ export function CalendarView({
     [events, filter],
   );
 
-  const selectedName =
-    students.find((s) => s.id === filter)?.name ?? "학생";
-
   return (
     <div className="space-y-6">
       <details className="rounded-lg border border-black/10 dark:border-white/15">
@@ -150,10 +135,7 @@ export function CalendarView({
           </label>
 
           {filter !== "all" && (
-            <>
-              <ExtractButton events={filtered} year={year} month={month} />
-              <ExportICSButton events={filtered} studentName={selectedName} />
-            </>
+            <ExtractButton events={filtered} year={year} month={month} />
           )}
           <SubscribeButton
             key={filter}
@@ -218,50 +200,43 @@ function ExtractButton({
   }
 
   return (
-    <button
-      type="button"
-      onClick={copy}
-      className="rounded-md border border-black/15 px-3 py-2 text-sm font-medium hover:bg-black/5 dark:border-white/20 dark:hover:bg-white/10"
-    >
-      {copied ? "복사됨 ✓" : "일정 추출"}
-    </button>
+    <span className="inline-flex items-center gap-1">
+      <button
+        type="button"
+        onClick={copy}
+        className="rounded-md border border-black/15 px-3 py-2 text-sm font-medium hover:bg-black/5 dark:border-white/20 dark:hover:bg-white/10"
+      >
+        {copied ? "복사됨 ✓" : "일정 추출"}
+      </button>
+      <HelpTooltip text="지금 보고 있는 달의 확정 수업 일정을 '6/7(일): 14:00~17:00' 형식 텍스트로 클립보드에 복사합니다. 취소된 수업은 제외되며, 복사한 내용을 학부모에게 그대로 전달할 수 있습니다." />
+    </span>
   );
 }
 
-/** 해당 학생의 모든 확정 수업을 .ics 파일로 내려받아 캘린더 앱에 가져오기 */
-function ExportICSButton({
-  events,
-  studentName,
-}: {
-  events: CalendarEvent[];
-  studentName: string;
-}) {
-  function download() {
-    const icsEvents = toICSEvents(events);
-    if (icsEvents.length === 0) {
-      window.alert("내보낼 일정이 없습니다.");
-      return;
-    }
-    const ics = buildICS(icsEvents, `${studentName} 과외`);
-    const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${studentName}_과외.ics`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }
+/** 작은 원형 물음표 버튼 — 클릭하면 안내 박스를 열고 닫는다 */
+function HelpTooltip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
 
   return (
-    <button
-      type="button"
-      onClick={download}
-      className="rounded-md border border-black/15 px-3 py-2 text-sm font-medium hover:bg-black/5 dark:border-white/20 dark:hover:bg-white/10"
-    >
-      캘린더 내보내기(.ics)
-    </button>
+    <span className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="도움말"
+        aria-expanded={open}
+        className="flex h-4 w-4 items-center justify-center rounded-full border border-black/30 text-[10px] font-medium leading-none text-black/60 hover:bg-black/5 dark:border-white/30 dark:text-white/60 dark:hover:bg-white/10"
+      >
+        ?
+      </button>
+      {open && (
+        <div
+          role="tooltip"
+          className="absolute left-1/2 top-full z-10 mt-1 w-56 -translate-x-1/2 rounded-md border border-black/10 bg-white p-2 text-xs leading-relaxed text-black/70 shadow-lg dark:border-white/15 dark:bg-neutral-900 dark:text-white/70"
+        >
+          {text}
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -307,14 +282,17 @@ function SubscribeButton({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={generate}
-        disabled={loading}
-        className="rounded-md border border-black/15 px-3 py-2 text-sm font-medium hover:bg-black/5 disabled:opacity-50 dark:border-white/20 dark:hover:bg-white/10"
-      >
-        {loading ? "발급 중…" : copied ? "URL 복사됨 ✓" : "구독 URL"}
-      </button>
+      <span className="inline-flex items-center gap-1">
+        <button
+          type="button"
+          onClick={generate}
+          disabled={loading}
+          className="rounded-md border border-black/15 px-3 py-2 text-sm font-medium hover:bg-black/5 disabled:opacity-50 dark:border-white/20 dark:hover:bg-white/10"
+        >
+          {loading ? "발급 중…" : copied ? "URL 복사됨 ✓" : "구독 URL"}
+        </button>
+        <HelpTooltip text="캘린더 앱에 한 번 구독해 두면 이후 일정이 바뀌어도 자동으로 동기화되는 비밀 webcal 주소를 발급합니다. 학생별로 발급하거나, 전체 학생 선택 시 모든 학생 일정을 이름별로 한 캘린더에서 볼 수 있습니다. 주소를 아는 사람은 누구나 일정을 볼 수 있으니 공유에 주의하세요." />
+      </span>
 
       {error && <p className="basis-full text-sm text-red-600">{error}</p>}
 
