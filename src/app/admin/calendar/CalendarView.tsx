@@ -125,7 +125,8 @@ export function CalendarView({
       </details>
 
       <div className="space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
+        {/* 학생 선택과 기능 버튼을 줄로 구분 */}
+        <div className="space-y-2">
           <label className="flex items-center gap-2 text-sm">
             <span className="font-medium">학생 보기</span>
             <select
@@ -142,23 +143,23 @@ export function CalendarView({
             </select>
           </label>
 
-          {filter !== "all" && (
-            <ExtractButton events={filtered} year={year} month={month} />
-          )}
-          <CaptureButton
-            events={filtered}
-            year={year}
-            month={month}
-            showName={filter === "all"}
-            studentName={
-              students.find((s) => s.id === filter)?.name ?? null
-            }
-          />
-          <SubscribeButton
-            key={filter}
-            studentId={filter}
-            subscribeAction={subscribeAction}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            {filter !== "all" && (
+              <ExtractButton events={filtered} year={year} month={month} />
+            )}
+            <CaptureButton
+              events={filtered}
+              year={year}
+              month={month}
+              showName={filter === "all"}
+              studentName={students.find((s) => s.id === filter)?.name ?? null}
+            />
+            <SubscribeButton
+              key={filter}
+              studentId={filter}
+              subscribeAction={subscribeAction}
+            />
+          </div>
         </div>
 
         <MonthCalendar
