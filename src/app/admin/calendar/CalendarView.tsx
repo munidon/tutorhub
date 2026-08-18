@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import {
   MonthCalendar,
@@ -20,6 +20,14 @@ const input =
   "rounded-md border border-black/15 px-3 py-2 text-sm dark:border-white/20 dark:bg-transparent";
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** 값이 바뀔 일이 없는 클라이언트 전용 판정용 — 구독하지 않는다 */
+const NO_SUBSCRIBE = () => () => {};
+
+/** 휴대폰·태블릿 여부 — 데스크톱에서는 OS 공유 시트를 쓰지 않는다 */
+const isTouchDevice = () =>
+  typeof window !== "undefined" &&
+  window.matchMedia("(pointer: coarse)").matches;
 
 /** 해당 월 확정 수업(취소·요청 제외)을 "6/7(일): 14:00~17:00" 형식 텍스트로 추출 */
 function buildScheduleText(
@@ -244,75 +252,122 @@ function CaptureButton({
   showName: boolean;
   studentName: string | null;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"save" | "copy" | null>(null);
+  const [done, setDone] = useState<{ kind: "save" | "copy"; label: string } | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
+  // 데스크톱에서만 '복사' 노출 — window 에 의존하므로 서버에서는 false 로 렌더
+  const canCopy = useSyncExternalStore(
+    NO_SUBSCRIBE,
+    () => typeof ClipboardItem !== "undefined" && !isTouchDevice(),
+    () => false,
+  );
 
-  async function capture() {
-    setBusy(true);
+  const fileName = `${year}-${pad2(month)}_${studentName ?? "전체"}_수업일정.png`;
+
+  /** 이미지 렌더러는 실제로 누를 때만 받아온다(초기 번들에서 제외) */
+  async function png(): Promise<Blob> {
+    const { renderCalendarPng } = await import("@/lib/calendarImage");
+    return renderCalendarPng({
+      events,
+      year,
+      month,
+      showName,
+      subtitle: studentName ?? "전체 학생",
+    });
+  }
+
+  function flash(kind: "save" | "copy", label: string) {
+    setDone({ kind, label });
+    setTimeout(() => setDone(null), 2000);
+  }
+
+  function download(blob: Blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+    flash("save", "저장됨 ✓");
+  }
+
+  async function save() {
+    setBusy("save");
     setError(null);
     try {
-      // 이미지 렌더러는 실제로 누를 때만 받아온다(초기 번들에서 제외)
-      const { renderCalendarPng } = await import("@/lib/calendarImage");
-      const blob = await renderCalendarPng({
-        events,
-        year,
-        month,
-        showName,
-        subtitle: studentName ?? "전체 학생",
-      });
-      const name = `${year}-${pad2(month)}_${studentName ?? "전체"}_수업일정.png`;
-      const file = new File([blob], name, { type: "image/png" });
-
-      function download() {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = name;
-        a.click();
-        URL.revokeObjectURL(url);
-        setDone("저장됨 ✓");
-      }
-
-      // 모바일이면 공유 시트로 바로 전달(카톡 등), 아니면 파일로 저장
-      if (navigator.canShare?.({ files: [file] })) {
+      const blob = await png();
+      const file = new File([blob], fileName, { type: "image/png" });
+      // 공유 시트는 휴대폰·태블릿에서만 — 데스크톱 OS 공유 시트의 '복사'는
+      // 파일과 이미지 데이터를 함께 넣어 붙여넣을 때 같은 그림이 두 개가 된다.
+      if (isTouchDevice() && navigator.canShare?.({ files: [file] })) {
         try {
           await navigator.share({
             files: [file],
             title: `${year}년 ${month}월 수업 일정`,
           });
-          setDone("공유됨 ✓");
+          flash("save", "공유됨 ✓");
         } catch (e) {
           // 사용자가 공유 시트를 닫음 → 아무것도 하지 않음
           if ((e as Error)?.name === "AbortError") return;
           // 이미지를 만드는 사이 클릭 권한이 만료된 경우(사파리 등) → 저장으로 폴백
-          download();
+          download(blob);
         }
       } else {
-        download();
+        download(blob);
       }
-      setTimeout(() => setDone(null), 2000);
     } catch (e) {
       setError(e instanceof Error ? e.message : "이미지 생성에 실패했습니다.");
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
+
+  /** PNG 하나만 클립보드에 넣는다 — 카톡·메신저에 붙여넣으면 그림 한 장 */
+  async function copy() {
+    setBusy("copy");
+    setError(null);
+    try {
+      // 사파리는 await 이후의 클립보드 쓰기를 막으므로 Promise 를 그대로 넘긴다
+      await navigator.clipboard.write([
+        new ClipboardItem({ "image/png": png() }),
+      ]);
+      flash("copy", "복사됨 ✓");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "이미지 복사에 실패했습니다.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const label = (kind: "save" | "copy", idle: string) =>
+    busy === kind ? "만드는 중…" : done?.kind === kind ? done.label : idle;
 
   return (
     <>
       <span className="inline-flex items-center gap-1">
         <button
           type="button"
-          onClick={capture}
-          disabled={busy}
+          onClick={save}
+          disabled={busy !== null}
           className="rounded-md border border-black/15 px-3 py-2 text-sm font-medium hover:bg-black/5 disabled:opacity-50 dark:border-white/20 dark:hover:bg-white/10"
         >
-          {busy ? "만드는 중…" : (done ?? "이미지 저장")}
+          {label("save", "이미지 저장")}
         </button>
+        {canCopy && (
+          <button
+            type="button"
+            onClick={copy}
+            disabled={busy !== null}
+            className="rounded-md border border-black/15 px-3 py-2 text-sm font-medium hover:bg-black/5 disabled:opacity-50 dark:border-white/20 dark:hover:bg-white/10"
+          >
+            {label("copy", "이미지 복사")}
+          </button>
+        )}
         <HelpTooltip
           text={
-            "지금 보고 있는 달의 캘린더를 그대로 PNG 이미지로 만들어 저장합니다(휴대폰에서는 공유 시트가 열려 카톡 등으로 바로 보낼 수 있습니다).\n학생을 선택해 두면 그 학생 일정만 담기고, 흰 배경으로 그려지므로 다크 모드에서도 그대로 전달할 수 있습니다."
+            "지금 보고 있는 달의 캘린더를 그대로 PNG 이미지로 만듭니다. 휴대폰에서는 공유 시트가 열려 카톡 등으로 바로 보낼 수 있고, 컴퓨터에서는 파일로 저장하거나 '이미지 복사'로 클립보드에 담아 바로 붙여넣을 수 있습니다.\n학생을 선택해 두면 그 학생 일정만 담기고, 흰 배경으로 그려지므로 다크 모드에서도 그대로 전달할 수 있습니다."
           }
         />
       </span>
