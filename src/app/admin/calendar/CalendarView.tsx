@@ -137,6 +137,15 @@ export function CalendarView({
           {filter !== "all" && (
             <ExtractButton events={filtered} year={year} month={month} />
           )}
+          <CaptureButton
+            events={filtered}
+            year={year}
+            month={month}
+            showName={filter === "all"}
+            studentName={
+              students.find((s) => s.id === filter)?.name ?? null
+            }
+          />
           <SubscribeButton
             key={filter}
             studentId={filter}
@@ -208,8 +217,107 @@ function ExtractButton({
       >
         {copied ? "복사됨 ✓" : "일정 추출"}
       </button>
-      <HelpTooltip text="지금 보고 있는 달의 확정 수업 일정을 '6/7(일): 14:00~17:00' 형식 텍스트로 클립보드에 복사합니다. 취소된 수업은 제외되며, 복사한 내용을 학부모에게 그대로 전달할 수 있습니다." />
+      <HelpTooltip
+        text={
+          "지금 보고 있는 달의 확정 수업 일정을 '6/7(일): 14:00~17:00' 형식 텍스트로 클립보드에 복사합니다.\n취소된 수업은 제외되며, 복사한 내용을 학부모에게 그대로 전달할 수 있습니다."
+        }
+      />
     </span>
+  );
+}
+
+/**
+ * 표시 중인 달의 캘린더를 PNG 이미지로 만들어 저장/공유 — 학부모 전달용.
+ * 화면을 캡처하는 대신 같은 데이터로 캔버스에 다시 그리므로 다크 모드·스크롤·
+ * 잘림에 영향받지 않는다. 학생을 선택해 두면 그 학생 일정만 담긴다.
+ */
+function CaptureButton({
+  events,
+  year,
+  month,
+  showName,
+  studentName,
+}: {
+  events: CalendarEvent[];
+  year: number;
+  month: number;
+  showName: boolean;
+  studentName: string | null;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function capture() {
+    setBusy(true);
+    setError(null);
+    try {
+      // 이미지 렌더러는 실제로 누를 때만 받아온다(초기 번들에서 제외)
+      const { renderCalendarPng } = await import("@/lib/calendarImage");
+      const blob = await renderCalendarPng({
+        events,
+        year,
+        month,
+        showName,
+        subtitle: studentName ?? "전체 학생",
+      });
+      const name = `${year}-${pad2(month)}_${studentName ?? "전체"}_수업일정.png`;
+      const file = new File([blob], name, { type: "image/png" });
+
+      function download() {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(url);
+        setDone("저장됨 ✓");
+      }
+
+      // 모바일이면 공유 시트로 바로 전달(카톡 등), 아니면 파일로 저장
+      if (navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: `${year}년 ${month}월 수업 일정`,
+          });
+          setDone("공유됨 ✓");
+        } catch (e) {
+          // 사용자가 공유 시트를 닫음 → 아무것도 하지 않음
+          if ((e as Error)?.name === "AbortError") return;
+          // 이미지를 만드는 사이 클릭 권한이 만료된 경우(사파리 등) → 저장으로 폴백
+          download();
+        }
+      } else {
+        download();
+      }
+      setTimeout(() => setDone(null), 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "이미지 생성에 실패했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <span className="inline-flex items-center gap-1">
+        <button
+          type="button"
+          onClick={capture}
+          disabled={busy}
+          className="rounded-md border border-black/15 px-3 py-2 text-sm font-medium hover:bg-black/5 disabled:opacity-50 dark:border-white/20 dark:hover:bg-white/10"
+        >
+          {busy ? "만드는 중…" : (done ?? "이미지 저장")}
+        </button>
+        <HelpTooltip
+          text={
+            "지금 보고 있는 달의 캘린더를 그대로 PNG 이미지로 만들어 저장합니다(휴대폰에서는 공유 시트가 열려 카톡 등으로 바로 보낼 수 있습니다).\n학생을 선택해 두면 그 학생 일정만 담기고, 흰 배경으로 그려지므로 다크 모드에서도 그대로 전달할 수 있습니다."
+          }
+        />
+      </span>
+      {error && <p className="basis-full text-sm text-red-600">{error}</p>}
+    </>
   );
 }
 
@@ -231,7 +339,7 @@ function HelpTooltip({ text }: { text: string }) {
       {open && (
         <div
           role="tooltip"
-          className="absolute left-1/2 top-full z-10 mt-1 w-56 -translate-x-1/2 rounded-md border border-black/10 bg-white p-2 text-xs leading-relaxed text-black/70 shadow-lg dark:border-white/15 dark:bg-neutral-900 dark:text-white/70"
+          className="absolute left-1/2 top-full z-10 mt-1 w-56 -translate-x-1/2 whitespace-pre-line rounded-md border border-black/10 bg-white p-2 text-xs leading-relaxed text-black/70 shadow-lg dark:border-white/15 dark:bg-neutral-900 dark:text-white/70"
         >
           {text}
         </div>
@@ -291,7 +399,11 @@ function SubscribeButton({
         >
           {loading ? "발급 중…" : copied ? "URL 복사됨 ✓" : "구독 URL"}
         </button>
-        <HelpTooltip text="캘린더 앱에 한 번 구독해 두면 이후 일정이 바뀌어도 자동으로 동기화되는 비밀 webcal 주소를 발급합니다. 학생별로 발급하거나, 전체 학생 선택 시 모든 학생 일정을 이름별로 한 캘린더에서 볼 수 있습니다. 주소를 아는 사람은 누구나 일정을 볼 수 있으니 공유에 주의하세요." />
+        <HelpTooltip
+          text={
+            "캘린더 앱에 한 번 구독해 두면 이후 일정이 바뀌어도 자동으로 동기화되는 비밀 webcal 주소를 발급합니다.\n학생별로 발급하거나, 전체 학생 선택 시 모든 학생 일정을 이름별로 한 캘린더에서 볼 수 있습니다.\n주소를 아는 사람은 누구나 일정을 볼 수 있으니 공유에 주의하세요."
+          }
+        />
       </span>
 
       {error && <p className="basis-full text-sm text-red-600">{error}</p>}
