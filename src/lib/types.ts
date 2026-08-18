@@ -3,7 +3,11 @@
 
 export type Role = "teacher" | "parent";
 export type ScheduleStatus = "confirmed" | "cancelled";
-/** 수업 구분: 정규 / 추가 / 변경 / 취소 (현재 상태) */
+/**
+ * 수업 구분: 정규 / 추가 / 변경 / 취소 (현재 상태).
+ * DB 트리거 set_schedule_derived() 가 origin_* 대비 계산해 채우는 **파생값**이다.
+ * 앱은 읽지도 쓰지도 말 것 — 라벨은 scheduleTag(), 정산은 adjustmentIn() 을 쓴다.
+ */
 export type ScheduleCategory = "regular" | "added" | "changed" | "cancelled";
 /** 원본 구분: 생성 시 고정 (정규로 계획 / 추가로 생성) */
 export type ScheduleBaseCategory = "regular" | "added";
@@ -46,6 +50,10 @@ export interface Schedule {
   status: ScheduleStatus;
   category: ScheduleCategory;
   base_category: ScheduleBaseCategory;
+  /** 최초 계획된 시간 — 생성 시 고정되고 이후 절대 바뀌지 않는다(변경·정산 판정 기준) */
+  origin_starts_at: string;
+  origin_ends_at: string;
+  /** 직전 값 — 요청 상세의 '전 → 후' 표기용. 판정 기준으로 쓰지 말 것 */
   prev_starts: string | null;
   prev_ends: string | null;
   // 직접 정산(현금 등으로 이미 받음) — 이월에서 제외
@@ -107,4 +115,26 @@ export interface RecurrenceTemplate {
   start_minute: number; // 자정부터 분(30분 단위)
   duration: number; // 분(60~360)
   created_at: string;
+}
+
+/** 수업 변경 이력 (schedule_changes) — 트리거가 자동 기록 */
+export type ScheduleChangeKind =
+  | "created"
+  | "changed"
+  | "reverted"
+  | "cancelled"
+  | "restored"
+  | "settled"
+  | "unsettled";
+
+export interface ScheduleChange {
+  id: string;
+  schedule_id: string;
+  kind: ScheduleChangeKind;
+  from_starts: string | null;
+  from_ends: string | null;
+  to_starts: string | null;
+  to_ends: string | null;
+  changed_by: string | null;
+  changed_at: string;
 }

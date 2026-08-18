@@ -1,11 +1,20 @@
 import { createClient } from "@/lib/supabase/server";
-import type { Schedule, ChangeRequest, RecurrenceTemplate } from "@/lib/types";
-import type { CalendarEvent } from "@/components/MonthCalendar";
+import type {
+  Schedule,
+  ChangeRequest,
+  RecurrenceTemplate,
+  ScheduleChange,
+} from "@/lib/types";
+import type { CalendarEvent, ChangeLogEntry } from "@/components/MonthCalendar";
 import {
-  categoryTag,
+  scheduleTag,
+  movedAcrossMonths,
+  hasAdjustment,
+  CARRIED_OUT_TAG,
   currentKstYearMonth,
   durationLabel,
 } from "@/lib/schedule";
+import { SHOW_CHANGE_LOG } from "@/lib/flags";
 import { calendarWindow, parseYm } from "@/lib/month";
 import { WEEKDAY_LABELS, minutesToHHMM } from "@/lib/recurrence";
 import { type ScheduleTemplate } from "./ScheduleForm";
@@ -13,6 +22,8 @@ import { CalendarView } from "./CalendarView";
 import {
   updateScheduleAction,
   cancelScheduleAction,
+  restoreScheduleAction,
+  revertScheduleAction,
   deleteScheduleAction,
   setScheduleSettledAction,
   ensureCalendarTokenAction,
@@ -20,10 +31,18 @@ import {
 
 // 화면에 실제로 쓰는 컬럼만 조회 — RSC 페이로드 축소
 const SCHEDULE_COLS =
-  "id, student_id, starts_at, ends_at, status, category, settled";
+  "id, student_id, starts_at, ends_at, status, base_category, origin_starts_at, origin_ends_at, settled";
 type ScheduleRow = Pick<
   Schedule,
-  "id" | "student_id" | "starts_at" | "ends_at" | "status" | "category" | "settled"
+  | "id"
+  | "student_id"
+  | "starts_at"
+  | "ends_at"
+  | "status"
+  | "base_category"
+  | "origin_starts_at"
+  | "origin_ends_at"
+  | "settled"
 > & {
   students: { name: string; color: string } | null;
 };
@@ -61,8 +80,12 @@ export default async function AdminCalendarPage({
     supabase
       .from("schedules")
       .select(`${SCHEDULE_COLS}, students(name, color)`)
-      .gte("starts_at", win.fetchStartISO)
-      .lt("starts_at", win.fetchEndISO)
+      // 다른 달로 옮겨진 수업은 '계획된 달'에도 흔적을 남겨야 하므로
+      // 현재 시각과 최초 계획 시각 중 하나라도 창 안이면 가져온다
+      .or(
+        `and(starts_at.gte."${win.fetchStartISO}",starts_at.lt."${win.fetchEndISO}"),` +
+          `and(origin_starts_at.gte."${win.fetchStartISO}",origin_starts_at.lt."${win.fetchEndISO}")`,
+      )
       .order("starts_at", { ascending: true }),
     supabase.from("students").select("id, name").eq("active", true).order("name"),
     supabase
@@ -91,19 +114,66 @@ export default async function AdminCalendarPage({
       )} (${durationLabel(t.duration)})`,
     }));
 
-  const confirmedEvents: CalendarEvent[] = schedules.map((s) => ({
-    id: s.id,
-    scheduleId: s.id,
-    studentId: s.student_id,
-    title: s.students?.name ?? "?",
-    color: s.students?.color ?? "#888",
-    startsAt: s.starts_at,
-    endsAt: s.ends_at,
-    status: s.status,
-    tag: categoryTag(s.status, s.category),
-    settled: s.settled,
-    settleable: s.category === "added" || s.category === "changed",
-  }));
+  // 변경 이력 — 노출 플래그가 꺼져 있으면 조회 자체를 생략
+  const logBySchedule = new Map<string, ChangeLogEntry[]>();
+  if (SHOW_CHANGE_LOG && schedules.length > 0) {
+    const { data: logRows } = await supabase
+      .from("schedule_changes")
+      .select("schedule_id, kind, from_starts, from_ends, to_starts, to_ends, changed_at")
+      .in(
+        "schedule_id",
+        schedules.map((s) => s.id),
+      )
+      .order("changed_at", { ascending: true });
+    for (const r of (logRows ?? []) as ScheduleChange[]) {
+      const list = logBySchedule.get(r.schedule_id) ?? [];
+      list.push({
+        kind: r.kind,
+        fromStarts: r.from_starts,
+        fromEnds: r.from_ends,
+        toStarts: r.to_starts,
+        toEnds: r.to_ends,
+        changedAt: r.changed_at,
+      });
+      logBySchedule.set(r.schedule_id, list);
+    }
+  }
+
+  const confirmedEvents: CalendarEvent[] = schedules.flatMap((s) => {
+    const base = {
+      studentId: s.student_id,
+      title: s.students?.name ?? "?",
+      color: s.students?.color ?? "#888",
+    };
+    const chip: CalendarEvent = {
+      ...base,
+      id: s.id,
+      scheduleId: s.id,
+      startsAt: s.starts_at,
+      endsAt: s.ends_at,
+      status: s.status,
+      tag: scheduleTag(s),
+      settled: s.settled,
+      settleable: hasAdjustment(s),
+      changeLog: logBySchedule.get(s.id),
+      originStartsAt: s.origin_starts_at,
+      originEndsAt: s.origin_ends_at,
+    };
+    // 다른 달로 옮겨진 수업은 계획됐던 자리에 '빠져나감' 표시를 남긴다.
+    // status:"cancelled" 로 두면 MonthCalendar 가 흐린 취소선 + 클릭 불가로 렌더한다.
+    if (!movedAcrossMonths(s)) return [chip];
+    return [
+      chip,
+      {
+        ...base,
+        id: `moved-${s.id}`,
+        startsAt: s.origin_starts_at,
+        endsAt: s.origin_ends_at,
+        status: "cancelled" as const,
+        tag: CARRIED_OUT_TAG,
+      },
+    ];
+  });
 
   const pendingEvents: CalendarEvent[] = pendingReqs.map((r) => {
     const base = r.schedules;
@@ -145,6 +215,8 @@ export default async function AdminCalendarPage({
         viewMaxYm={win.viewMaxYm}
         changeAction={updateScheduleAction}
         cancelAction={cancelScheduleAction}
+        restoreAction={restoreScheduleAction}
+        revertAction={revertScheduleAction}
         deleteAction={deleteScheduleAction}
         settleAction={setScheduleSettledAction}
         subscribeAction={ensureCalendarTokenAction}
