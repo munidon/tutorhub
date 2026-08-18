@@ -3,7 +3,9 @@ import type { Student, ChangeRequest, BankInfo } from "@/lib/types";
 import { requestChangeAction, requestCancelAction } from "../actions";
 import type { CalendarEvent } from "@/components/MonthCalendar";
 import {
-  categoryTag,
+  scheduleTag,
+  movedAcrossMonths,
+  CARRIED_OUT_TAG,
   currentKstYearMonth,
   type BillingSchedule,
 } from "@/lib/schedule";
@@ -18,7 +20,7 @@ const REQ_LABEL: Record<ChangeRequest["type"], string> = {
 
 // 화면(달력·정산)에 실제로 쓰는 컬럼만 조회 — RSC 페이로드 축소
 const SCHEDULE_COLS =
-  "id, student_id, starts_at, ends_at, status, category, base_category, prev_starts, prev_ends, settled";
+  "id, student_id, starts_at, ends_at, status, base_category, origin_starts_at, origin_ends_at, settled";
 type ScheduleRow = BillingSchedule & { id: string };
 
 // 요청 칩의 기준 시각은 원본 수업을 임베드해 조회 (조회 창과 무관하게 정확)
@@ -50,8 +52,11 @@ export default async function ParentCalendarPage({
     supabase
       .from("schedules")
       .select(SCHEDULE_COLS)
-      .gte("starts_at", win.fetchStartISO)
-      .lt("starts_at", win.fetchEndISO)
+      // 다른 달로 옮겨진 수업은 계획됐던 달에도 흔적을 남긴다 (선생님 캘린더와 동일)
+      .or(
+        `and(starts_at.gte."${win.fetchStartISO}",starts_at.lt."${win.fetchEndISO}"),` +
+          `and(origin_starts_at.gte."${win.fetchStartISO}",origin_starts_at.lt."${win.fetchEndISO}")`,
+      )
       .order("starts_at", { ascending: true }),
     supabase
       .from("requests")
@@ -71,18 +76,36 @@ export default async function ParentCalendarPage({
   const nameOf = (id: string) => studentById.get(id)?.name ?? "자녀";
   const colorOf = (id: string) => studentById.get(id)?.color ?? "#3b82f6";
 
-  const confirmedEvents: CalendarEvent[] = schedules.map((s) => ({
-    id: s.id,
-    scheduleId: s.id,
-    studentId: s.student_id,
-    title: nameOf(s.student_id),
-    color: colorOf(s.student_id),
-    startsAt: s.starts_at,
-    endsAt: s.ends_at,
-    status: s.status,
-    tag: categoryTag(s.status, s.category),
-    settled: s.settled,
-  }));
+  const confirmedEvents: CalendarEvent[] = schedules.flatMap((s) => {
+    const base = {
+      studentId: s.student_id,
+      title: nameOf(s.student_id),
+      color: colorOf(s.student_id),
+    };
+    const chip: CalendarEvent = {
+      ...base,
+      id: s.id,
+      scheduleId: s.id,
+      startsAt: s.starts_at,
+      endsAt: s.ends_at,
+      status: s.status,
+      tag: scheduleTag(s),
+      settled: s.settled,
+    };
+    // 계획됐던 자리에 '빠져나감' 흔적 — 클릭 불가(scheduleId 없음)
+    if (!movedAcrossMonths(s)) return [chip];
+    return [
+      chip,
+      {
+        ...base,
+        id: `moved-${s.id}`,
+        startsAt: s.origin_starts_at,
+        endsAt: s.origin_ends_at,
+        status: "cancelled" as const,
+        tag: CARRIED_OUT_TAG,
+      },
+    ];
+  });
 
   const pendingEvents: CalendarEvent[] = pendingReqs.map((r) => {
     const base = r.schedules;
