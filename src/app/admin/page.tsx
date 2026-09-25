@@ -89,6 +89,11 @@ export default async function AdminDashboard({
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-2xl font-bold">수업료 정산</h1>
         <div className="ml-auto flex items-center gap-1">
+          {!isCurrent && (
+            <Link href="/admin" className={navBtn}>
+              이번달
+            </Link>
+          )}
           <Link href={`/admin?ym=${ymStr(prevY, prevM)}`} className={navBtn} aria-label="이전 달">
             ‹
           </Link>
@@ -98,11 +103,6 @@ export default async function AdminDashboard({
           <Link href={`/admin?ym=${ymStr(nextY, nextM)}`} className={navBtn} aria-label="다음 달">
             ›
           </Link>
-          {!isCurrent && (
-            <Link href="/admin" className={navBtn}>
-              이번달
-            </Link>
-          )}
         </div>
       </div>
 

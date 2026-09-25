@@ -93,6 +93,11 @@ export default async function ParentRequestsPage({
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-2xl font-bold">요청 내역</h1>
         <div className="ml-auto flex items-center gap-1">
+          {!isCurrent && (
+            <Link href="/requests" className={navBtn}>
+              이번달
+            </Link>
+          )}
           <Link
             href={`/requests?ym=${ymStr(prevY, prevM)}`}
             className={navBtn}
@@ -110,11 +115,6 @@ export default async function ParentRequestsPage({
           >
             ›
           </Link>
-          {!isCurrent && (
-            <Link href="/requests" className={navBtn}>
-              이번달
-            </Link>
-          )}
         </div>
       </div>
 
