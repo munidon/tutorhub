@@ -1,5 +1,5 @@
 import type { Schedule } from "./types";
-import { kstDateKey } from "./datetime";
+import { kstDateKey, kstTime, kstWeekday } from "./datetime";
 
 // ── 수업 시간(duration) ──────────────────────────────────────
 /** 수업 시간 옵션(분): 1시간 ~ 6시간, 30분 단위 */
@@ -267,4 +267,133 @@ export function computeBilling(
 export function currentKstYearMonth(): [number, number] {
   const [y, m] = kstDateKey(new Date().toISOString()).split("-").map(Number);
   return [y, m];
+}
+
+// ── 전월 이월 안내 문구 ─────────────────────────────────────
+
+export type CarryItem = {
+  kind: "cancelled" | "added" | "changed";
+  starts_at: string;
+  ends_at: string;
+  origin_starts_at: string;
+  origin_ends_at: string;
+  hours: number; // 해당 월 이월 기여 시간(부호 있음) = adjustmentIn
+};
+
+/** 해당 월에서 이월에 반영되는(미정산) 조정분 목록 — monthTotals 의 unsettledChangeHours 와 같은 기준 */
+export function unsettledCarryItems(
+  schedules: BillingInput[],
+  year: number,
+  month: number,
+): CarryItem[] {
+  const items: CarryItem[] = [];
+  for (const s of schedules) {
+    if (s.settled) continue;
+    const hours = adjustmentIn(s, year, month);
+    if (Math.abs(hours) <= EPS) continue;
+    const kind =
+      s.status === "cancelled"
+        ? "cancelled"
+        : s.base_category === "added"
+          ? "added"
+          : "changed"; // 같은 달 안의 길이 변경 + 다른 달로/에서 이월
+    items.push({
+      kind,
+      starts_at: s.starts_at,
+      ends_at: s.ends_at,
+      origin_starts_at: s.origin_starts_at,
+      origin_ends_at: s.origin_ends_at,
+      hours,
+    });
+  }
+  return items.sort((a, b) =>
+    a.origin_starts_at.localeCompare(b.origin_starts_at),
+  );
+}
+
+const fmtH = (n: number) => {
+  const v = Math.abs(n);
+  return `${Number.isInteger(v) ? v : v.toFixed(1)}시간`;
+};
+const fmtWonSigned = (n: number) =>
+  `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n).toLocaleString("ko-KR")}원`;
+
+/** "9/12(금) 16:00~18:00" */
+function slotLabel(start: string, end: string): string {
+  const [, m, d] = kstDateKey(start).split("-").map(Number);
+  return `${m}/${d}(${kstWeekday(start)}) ${kstTime(start)}~${kstTime(end)}`;
+}
+
+/** 학부모에게 보낼 전월 이월 안내 문구. 이월 항목이 없으면 null. */
+export function buildCarryNotice({
+  name,
+  billing,
+  schedules,
+  year,
+  month,
+}: {
+  name: string;
+  billing: StudentBilling;
+  schedules: BillingInput[];
+  year: number;
+  month: number;
+}): string | null {
+  const prevY = month === 1 ? year - 1 : year;
+  const prevM = month === 1 ? 12 : month - 1;
+  const items = unsettledCarryItems(schedules, prevY, prevM);
+  if (items.length === 0) return null;
+
+  const rate = billing.rate;
+  const tail = (h: number) =>
+    `${h > 0 ? "+" : "−"}${fmtH(h)}` +
+    (rate == null ? "" : ` (${fmtWonSigned(Math.round(h * rate))})`);
+
+  const groups: { title: string; lines: string[] }[] = [
+    {
+      title: "취소된 수업",
+      // 취소는 당초 계획 시간 기준으로 차감되므로 계획된 시간으로 안내
+      lines: items
+        .filter((i) => i.kind === "cancelled")
+        .map((i) => `- ${slotLabel(i.origin_starts_at, i.origin_ends_at)} · ${tail(i.hours)}`),
+    },
+    {
+      title: "추가된 수업",
+      lines: items
+        .filter((i) => i.kind === "added")
+        .map((i) => `- ${slotLabel(i.starts_at, i.ends_at)} · ${tail(i.hours)}`),
+    },
+    {
+      title: "시간이 변경된 수업",
+      lines: items
+        .filter((i) => i.kind === "changed")
+        .map(
+          (i) =>
+            `- ${slotLabel(i.origin_starts_at, i.origin_ends_at)} → ${slotLabel(i.starts_at, i.ends_at)} · ${tail(i.hours)}`,
+        ),
+    },
+  ].filter((g) => g.lines.length > 0);
+
+  const onlyCancelled = items.every((i) => i.kind === "cancelled");
+  const lines: string[] = [
+    `안녕하세요, ${name} 학부모님.`,
+    `${month}월 수업료 안내드립니다.`,
+    "",
+    onlyCancelled
+      ? `${prevM}월에 아래 수업이 취소되어, 해당 수업료를 ${month}월 정규 수업료에서 차감했습니다.`
+      : `${prevM}월 수업 변동분을 ${month}월 정규 수업료에 이월 반영했습니다.`,
+  ];
+  for (const g of groups) {
+    lines.push("", `[${g.title}]`, ...g.lines);
+  }
+
+  if (rate != null && billing.regularFee != null) {
+    lines.push(
+      "",
+      `· ${month}월 정규 수업 ${fmtH(billing.regularHours)} × ${rate.toLocaleString("ko-KR")}원 = ${Math.round(billing.regularHours * rate).toLocaleString("ko-KR")}원`,
+      `· 전월 이월 ${fmtWonSigned(billing.prevCarry ?? 0)}`,
+      `· ${month}월 정규 수업료 ${billing.regularFee.toLocaleString("ko-KR")}원`,
+    );
+  }
+
+  return lines.join("\n");
 }
