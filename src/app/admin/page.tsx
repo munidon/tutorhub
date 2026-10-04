@@ -2,6 +2,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import type { Student } from "@/lib/types";
 import {
+  buildCarryNotice,
   computeBilling,
   currentKstYearMonth,
   type BillingSchedule,
@@ -9,6 +10,7 @@ import {
 import { kstMonthStartISO, ymKey as ymStr } from "@/lib/month";
 import { BillingCard } from "@/components/BillingCard";
 import { PaymentToggle } from "./PaymentToggle";
+import { CarryNoticeButton } from "./CarryNoticeButton";
 
 // 정산 계산(computeBilling)에 필요한 컬럼만 조회
 const BILLING_COLS =
@@ -65,15 +67,22 @@ export default async function AdminDashboard({
     ).push(s);
   }
 
-  const billings = students.map((st) => ({
-    student: st,
-    billing: computeBilling(
-      schedulesByStudent.get(st.id) ?? [],
-      st.hourly_rate,
-      year,
-      month,
-    ),
-  }));
+  const billings = students.map((st) => {
+    const own = schedulesByStudent.get(st.id) ?? [];
+    const billing = computeBilling(own, st.hourly_rate, year, month);
+    return {
+      student: st,
+      billing,
+      // 전월 이월 항목(취소 등)이 있을 때만 안내 문구 생성
+      carryNotice: buildCarryNotice({
+        name: st.name,
+        billing,
+        schedules: own,
+        year,
+        month,
+      }),
+    };
+  });
 
   const totalRegularFee = billings.reduce(
     (sum, b) => sum + (b.billing.regularFee ?? 0),
@@ -122,17 +131,25 @@ export default async function AdminDashboard({
           </div>
 
           <div className="space-y-3">
-            {billings.map(({ student, billing }) => (
+            {billings.map(({ student, billing, carryNotice }) => (
               <BillingCard
                 key={student.id}
                 name={student.name}
                 billing={billing}
                 footer={
-                  <PaymentToggle
-                    studentId={student.id}
-                    ym={monthYm}
-                    paid={paidSet.has(student.id)}
-                  />
+                  <div className="space-y-3">
+                    <PaymentToggle
+                      studentId={student.id}
+                      ym={monthYm}
+                      paid={paidSet.has(student.id)}
+                    />
+                    {carryNotice && (
+                      <CarryNoticeButton
+                        key={`${monthYm}-${carryNotice}`}
+                        notice={carryNotice}
+                      />
+                    )}
+                  </div>
                 }
               />
             ))}
