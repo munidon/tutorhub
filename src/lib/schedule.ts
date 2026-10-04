@@ -1,4 +1,4 @@
-import type { Schedule, ScheduleStatus, ScheduleCategory } from "./types";
+import type { Schedule } from "./types";
 import { kstDateKey, kstTime, kstWeekday } from "./datetime";
 
 // ── 수업 시간(duration) ──────────────────────────────────────
@@ -28,58 +28,100 @@ export function isValidDuration(minutes: number): boolean {
   );
 }
 
-/** 캘린더 칩에 붙일 수업 구분 라벨 (정규는 라벨 없음). */
-export function categoryTag(
-  status: ScheduleStatus,
-  category: ScheduleCategory,
-): string | undefined {
-  if (status === "cancelled") return "취소";
-  if (category === "added") return "추가";
-  if (category === "changed") return "변경";
-  return undefined;
-}
-
-// ── 정산(수업료) 계산 ────────────────────────────────────────
-// 정규시간은 '당초 계획'(base_category='regular') 기준 — 취소/변경돼도 유지.
-// 취소/변경 효과는 이월(변경시간)에만 반영. 부호: 추가(+)/취소(−), 변경=(후−전).
-// 정규 수업료 = 정규시간×시급 + 전월 이월,  이월 수업료 = 변경시간×시급.
+// ── 변경 판정 ────────────────────────────────────────────────
+// 기준은 '직전 값'이 아니라 '최초 계획값'(origin_*, DB 트리거가 불변으로 고정).
+// 따라서 옮겼다가 되돌리면 자동으로 '변경 없음'이 된다.
 
 const HOUR_MS = 3_600_000;
+const EPS = 1e-9;
 
 export type BillingInput = Pick<
   Schedule,
   | "starts_at"
   | "ends_at"
   | "status"
-  | "category"
   | "base_category"
-  | "prev_starts"
-  | "prev_ends"
+  | "origin_starts_at"
+  | "origin_ends_at"
   | "settled"
 >;
 
 /** 정산 계산에 필요한 최소 스키마 — 전체 Schedule 대신 클라이언트로 보낼 때 사용 */
 export type BillingSchedule = BillingInput & { student_id: string };
 
+function sameTime(a: string, b: string): boolean {
+  return new Date(a).getTime() === new Date(b).getTime();
+}
+
 function durHours(start: string, end: string): number {
   return (new Date(end).getTime() - new Date(start).getTime()) / HOUR_MS;
 }
 
-/** 당초 계획된 길이(변경됐으면 변경 전, 아니면 현재) */
+/** 당초 계획된 길이 (origin 기준) */
 function plannedHours(s: BillingInput): number {
-  return s.prev_starts && s.prev_ends
-    ? durHours(s.prev_starts, s.prev_ends)
-    : durHours(s.starts_at, s.ends_at);
+  return durHours(s.origin_starts_at, s.origin_ends_at);
+}
+
+/** 실제로 잡혀 있는 현재 길이 */
+function actualHours(s: BillingInput): number {
+  return durHours(s.starts_at, s.ends_at);
+}
+
+/** 최초 계획과 시간(시작 또는 길이)이 다른가 */
+export function isChanged(s: BillingInput): boolean {
+  return (
+    !sameTime(s.starts_at, s.origin_starts_at) ||
+    !sameTime(s.ends_at, s.origin_ends_at)
+  );
+}
+
+function ymOf(iso: string): [number, number] {
+  const [y, m] = kstDateKey(iso).split("-").map(Number);
+  return [y, m];
 }
 
 function isInMonth(iso: string, year: number, month: number): boolean {
-  const [y, m] = kstDateKey(iso).split("-").map(Number);
+  const [y, m] = ymOf(iso);
   return y === year && m === month;
 }
 
+/** 계획된 달을 벗어나 다른 달로 옮겨졌는가 (= 이월) */
+export function movedAcrossMonths(s: BillingInput): boolean {
+  if (s.status !== "confirmed") return false;
+  const [oy, om] = ymOf(s.origin_starts_at);
+  const [cy, cm] = ymOf(s.starts_at);
+  return oy !== cy || om !== cm;
+}
+
+/** 계획된 달에 남기는 '빠져나감' 표시용 라벨 (실제 수업은 다른 달에 있음) */
+export const CARRIED_OUT_TAG = "취소-이월";
+
+/**
+ * 캘린더 칩 라벨. 저장된 category 가 아니라 origin 대비 계산으로 도출한다.
+ * 우선순위: 취소 > 추가 > 이월 > 변경. (정규·무변경은 라벨 없음)
+ */
+export function scheduleTag(s: BillingInput): string | undefined {
+  if (s.status === "cancelled") return "취소";
+  // 추가 수업은 옮겨도 '추가'가 정산상 더 중요한 사실이므로 유지
+  if (s.base_category === "added") return "추가";
+  if (movedAcrossMonths(s)) return "이월";
+  if (isChanged(s)) return "변경";
+  return undefined;
+}
+
+// ── 정산(수업료) 계산 ────────────────────────────────────────
+// 정규시간은 '당초 계획'(origin_starts_at 의 달, base_category='regular') 기준 —
+// 취소·변경·이월돼도 계획된 달에 그대로 유지된다.
+//
+// 조정(이월)은 수업 하나가 두 달에 걸쳐 기여할 수 있다:
+//   계획된 달: (추가면 +planned) − planned
+//   실제 달  : 취소가 아니면 + actual
+// 같은 달 안의 변경이면 두 항이 합쳐져 (actual − planned) = 기존 delta 가 되고,
+// 요일·시각만 옮긴 경우엔 0 이 되어 정산 대상에서 빠진다.
+
 export type ChangeBreakdown = {
   addedHours: number; // 추가 (+)
-  changedDelta: number; // 변경 (후−전, ±)
+  changedDelta: number; // 변경·이월 (±)
   cancelledHours: number; // 취소 (양수 크기)
   changeHours: number; // 총합 = added + changedDelta − cancelled
 };
@@ -91,6 +133,32 @@ type MonthTotals = ChangeBreakdown & {
   anySettled: boolean; // 정산 완료된 조정분이 하나라도 있는가
   anyUnsettled: boolean; // 정산 안 된 조정분이 하나라도 있는가
 };
+
+/** 해당 월에 이 수업이 만드는 조정(이월) 기여 — 부호 있음 */
+export function adjustmentIn(
+  s: BillingInput,
+  year: number,
+  month: number,
+): number {
+  const inOrigin = isInMonth(s.origin_starts_at, year, month);
+  const inCurrent = isInMonth(s.starts_at, year, month);
+  let v = 0;
+  // 추가 수업은 정규시간에 안 잡히므로 계획된 달에 조정으로 먼저 더한다
+  if (s.base_category === "added" && inOrigin) v += plannedHours(s);
+  // 계획된 달에서 빼고, 실제로 열린 달에 더한다
+  if (inOrigin) v -= plannedHours(s);
+  if (s.status === "confirmed" && inCurrent) v += actualHours(s);
+  return v;
+}
+
+/** 어느 달에서든 조정 기여가 0 이 아닌가 → '수업료 수령 처리' 대상 여부 */
+export function hasAdjustment(s: BillingInput): boolean {
+  const [oy, om] = ymOf(s.origin_starts_at);
+  if (Math.abs(adjustmentIn(s, oy, om)) > EPS) return true;
+  const [cy, cm] = ymOf(s.starts_at);
+  if (oy === cy && om === cm) return false;
+  return Math.abs(adjustmentIn(s, cy, cm)) > EPS;
+}
 
 function monthTotals(
   schedules: BillingInput[],
@@ -108,33 +176,31 @@ function monthTotals(
   let anyUnsettled = false;
 
   for (const s of schedules) {
-    if (!isInMonth(s.starts_at, year, month)) continue;
+    const inOrigin = isInMonth(s.origin_starts_at, year, month);
+    const inCurrent = isInMonth(s.starts_at, year, month);
+    if (!inOrigin && !inCurrent) continue;
 
-    let contrib = 0; // 이 수업의 변경 기여(부호 있음)
-    let isAdjustment = false;
-
-    if (s.base_category === "regular") {
-      // 정규로 계획된 수업은 취소/변경돼도 당초 계획 시간을 정규시간에 유지
+    // 정규로 계획된 수업은 취소·변경·이월돼도 계획된 달의 정규시간에 유지
+    if (s.base_category === "regular" && inOrigin) {
       regularHours += plannedHours(s);
-      if (s.status === "cancelled") {
-        cancelledHours += plannedHours(s);
-        contrib = -plannedHours(s);
-        isAdjustment = true;
-      } else if (s.category === "changed") {
-        const delta = durHours(s.starts_at, s.ends_at) - plannedHours(s);
-        changedDelta += delta;
-        contrib = delta;
-        isAdjustment = true;
-      }
-    } else if (s.status === "confirmed") {
-      // 추가로 생성된 수업: 정규시간 미포함, 변경(추가)으로만
-      const d = durHours(s.starts_at, s.ends_at);
-      addedHours += d;
-      contrib = d;
-      isAdjustment = true;
     }
 
-    if (isAdjustment) {
+    const contrib = adjustmentIn(s, year, month);
+
+    // 표시용 3분류: 추가/취소를 먼저 떼고 나머지를 '변경·이월'로
+    const added =
+      s.base_category === "added" && s.status === "confirmed" && inCurrent
+        ? actualHours(s)
+        : 0;
+    const cancelled =
+      s.base_category === "regular" && s.status === "cancelled" && inOrigin
+        ? plannedHours(s)
+        : 0;
+    addedHours += added;
+    cancelledHours += cancelled;
+    changedDelta += contrib - added + cancelled;
+
+    if (Math.abs(contrib) > EPS) {
       if (s.settled) anySettled = true;
       else {
         anyUnsettled = true;
@@ -209,9 +275,9 @@ export type CarryItem = {
   kind: "cancelled" | "added" | "changed";
   starts_at: string;
   ends_at: string;
-  prev_starts: string | null;
-  prev_ends: string | null;
-  hours: number; // 이월 기여 시간(부호 있음): 취소(−)/추가(+)/변경(후−전)
+  origin_starts_at: string;
+  origin_ends_at: string;
+  hours: number; // 해당 월 이월 기여 시간(부호 있음) = adjustmentIn
 };
 
 /** 해당 월에서 이월에 반영되는(미정산) 조정분 목록 — monthTotals 의 unsettledChangeHours 와 같은 기준 */
@@ -222,26 +288,27 @@ export function unsettledCarryItems(
 ): CarryItem[] {
   const items: CarryItem[] = [];
   for (const s of schedules) {
-    if (s.settled || !isInMonth(s.starts_at, year, month)) continue;
-    const base = {
+    if (s.settled) continue;
+    const hours = adjustmentIn(s, year, month);
+    if (Math.abs(hours) <= EPS) continue;
+    const kind =
+      s.status === "cancelled"
+        ? "cancelled"
+        : s.base_category === "added"
+          ? "added"
+          : "changed"; // 같은 달 안의 길이 변경 + 다른 달로/에서 이월
+    items.push({
+      kind,
       starts_at: s.starts_at,
       ends_at: s.ends_at,
-      prev_starts: s.prev_starts,
-      prev_ends: s.prev_ends,
-    };
-    if (s.base_category === "regular") {
-      if (s.status === "cancelled") {
-        items.push({ ...base, kind: "cancelled", hours: -plannedHours(s) });
-      } else if (s.category === "changed") {
-        const delta = durHours(s.starts_at, s.ends_at) - plannedHours(s);
-        // 길이가 같은 변경은 이월에 영향이 없으므로 안내에서 제외
-        if (delta !== 0) items.push({ ...base, kind: "changed", hours: delta });
-      }
-    } else if (s.status === "confirmed") {
-      items.push({ ...base, kind: "added", hours: durHours(s.starts_at, s.ends_at) });
-    }
+      origin_starts_at: s.origin_starts_at,
+      origin_ends_at: s.origin_ends_at,
+      hours,
+    });
   }
-  return items.sort((a, b) => a.starts_at.localeCompare(b.starts_at));
+  return items.sort((a, b) =>
+    a.origin_starts_at.localeCompare(b.origin_starts_at),
+  );
 }
 
 const fmtH = (n: number) => {
@@ -277,38 +344,32 @@ export function buildCarryNotice({
   if (items.length === 0) return null;
 
   const rate = billing.rate;
-  const amount = (h: number) =>
-    rate == null ? "" : ` (${fmtWonSigned(Math.round(h * rate))})`;
+  const tail = (h: number) =>
+    `${h > 0 ? "+" : "−"}${fmtH(h)}` +
+    (rate == null ? "" : ` (${fmtWonSigned(Math.round(h * rate))})`);
 
   const groups: { title: string; lines: string[] }[] = [
     {
       title: "취소된 수업",
+      // 취소는 당초 계획 시간 기준으로 차감되므로 계획된 시간으로 안내
       lines: items
         .filter((i) => i.kind === "cancelled")
-        .map((i) => {
-          // 변경 후 취소된 수업은 당초 계획 시간 기준으로 차감되므로 원래 시간으로 안내
-          const [s, e] =
-            i.prev_starts && i.prev_ends
-              ? [i.prev_starts, i.prev_ends]
-              : [i.starts_at, i.ends_at];
-          return `- ${slotLabel(s, e)} · ${fmtH(i.hours)}${amount(i.hours)}`;
-        }),
+        .map((i) => `- ${slotLabel(i.origin_starts_at, i.origin_ends_at)} · ${tail(i.hours)}`),
     },
     {
       title: "추가된 수업",
       lines: items
         .filter((i) => i.kind === "added")
-        .map((i) => `- ${slotLabel(i.starts_at, i.ends_at)} · ${fmtH(i.hours)}${amount(i.hours)}`),
+        .map((i) => `- ${slotLabel(i.starts_at, i.ends_at)} · ${tail(i.hours)}`),
     },
     {
       title: "시간이 변경된 수업",
       lines: items
         .filter((i) => i.kind === "changed")
-        .map((i) => {
-          const before = i.prev_starts && i.prev_ends ? `${slotLabel(i.prev_starts, i.prev_ends)} → ` : "";
-          const sign = i.hours > 0 ? "+" : "−";
-          return `- ${before}${slotLabel(i.starts_at, i.ends_at)} · ${sign}${fmtH(i.hours)}${amount(i.hours)}`;
-        }),
+        .map(
+          (i) =>
+            `- ${slotLabel(i.origin_starts_at, i.origin_ends_at)} → ${slotLabel(i.starts_at, i.ends_at)} · ${tail(i.hours)}`,
+        ),
     },
   ].filter((g) => g.lines.length > 0);
 

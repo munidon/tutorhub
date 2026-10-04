@@ -73,22 +73,12 @@ export async function updateScheduleAction(
 
   const supabase = await createClient();
 
-  // 변경 전 시간 보존 → 구분 '변경'으로 표시 (정산 delta·이력용)
-  const { data: before } = await supabase
-    .from("schedules")
-    .select("starts_at, ends_at")
-    .eq("id", id)
-    .single();
-
+  // 시간만 갱신한다. 구분(category)·직전값(prev_*)·이력 기록은
+  // DB 트리거(set_schedule_derived / log_schedule_change)가 처리한다.
+  // 최초 계획값(origin_*)은 불변이므로 되돌리면 자동으로 '변경 없음'이 된다.
   const { error } = await supabase
     .from("schedules")
-    .update({
-      starts_at: starts,
-      ends_at: ends,
-      prev_starts: before?.starts_at ?? null,
-      prev_ends: before?.ends_at ?? null,
-      category: "changed",
-    })
+    .update({ starts_at: starts, ends_at: ends })
     .eq("id", id);
 
   if (error) {
@@ -115,12 +105,87 @@ export async function cancelScheduleAction(
   const supabase = await createClient();
   const { error } = await supabase
     .from("schedules")
-    .update({ status: "cancelled", category: "cancelled" })
+    .update({ status: "cancelled" })
     .eq("id", id);
 
   if (error) return { error: `취소 실패: ${error.message}` };
 
   revalidatePath("/admin/calendar");
+  return { ok: true };
+}
+
+/**
+ * 변경을 롤백한다 — 최초 계획 시간(origin_*)으로 되돌린다.
+ * 트리거가 구분·정산을 다시 계산하므로 '애초에 변경되지 않은' 상태로 완전히 복귀한다.
+ * (직접 수령 표시도 함께 해제된다)
+ */
+export async function revertScheduleAction(
+  _prev: CreateScheduleState,
+  formData: FormData,
+): Promise<CreateScheduleState> {
+  await requireRole("teacher");
+
+  const id = String(formData.get("schedule_id") ?? "");
+  if (!id) return { error: "대상 일정이 없습니다." };
+
+  const supabase = await createClient();
+
+  // 되돌릴 시각은 클라이언트가 아니라 DB 의 origin 에서 읽는다
+  const { data: row, error: readErr } = await supabase
+    .from("schedules")
+    .select("origin_starts_at, origin_ends_at")
+    .eq("id", id)
+    .single();
+  if (readErr || !row) return { error: "대상 일정을 찾을 수 없습니다." };
+
+  const { error } = await supabase
+    .from("schedules")
+    .update({ starts_at: row.origin_starts_at, ends_at: row.origin_ends_at })
+    .eq("id", id);
+
+  if (error) {
+    // 비워둔 원래 자리를 그 사이 다른 수업이 차지했을 수 있다
+    const msg = error.message.includes("schedules_no_overlap")
+      ? "원래 시간대에 이미 다른 수업이 있습니다."
+      : error.message;
+    return { error: `되돌리기 실패: ${msg}` };
+  }
+
+  revalidatePath("/admin/calendar");
+  revalidatePath("/admin");
+  return { ok: true };
+}
+
+/**
+ * 취소한 수업을 되살린다 (status=confirmed).
+ * 구분·정산 대상 여부는 트리거가 origin 기준으로 다시 계산하므로
+ * 취소 전 상태가 그대로 복원된다.
+ */
+export async function restoreScheduleAction(
+  _prev: CreateScheduleState,
+  formData: FormData,
+): Promise<CreateScheduleState> {
+  await requireRole("teacher");
+
+  const id = String(formData.get("schedule_id") ?? "");
+  if (!id) return { error: "대상 일정이 없습니다." };
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("schedules")
+    .update({ status: "confirmed" })
+    .eq("id", id);
+
+  if (error) {
+    // 취소된 사이 다른 수업이 그 자리를 차지했을 수 있다
+    const msg = error.message.includes("schedules_no_overlap")
+      ? "해당 시간대에 이미 다른 수업이 있습니다."
+      : error.message;
+    return { error: `취소 해제 실패: ${msg}` };
+  }
+
+  revalidatePath("/admin/calendar");
+  revalidatePath("/admin");
   return { ok: true };
 }
 
@@ -154,6 +219,7 @@ export async function setScheduleSettledAction(
 /**
  * 선생님이 잘못 입력한 수업을 완전히 삭제 (행 자체 제거).
  * '취소'(status=cancelled, 정산 반영)와 달리 기록·정산에 남지 않는다.
+ * schedule_changes 의 변경 이력도 on delete cascade 로 함께 사라진다 — 의도된 동작.
  */
 export async function deleteScheduleAction(
   _prev: CreateScheduleState,

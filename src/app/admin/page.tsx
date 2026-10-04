@@ -14,7 +14,7 @@ import { CarryNoticeButton } from "./CarryNoticeButton";
 
 // 정산 계산(computeBilling)에 필요한 컬럼만 조회
 const BILLING_COLS =
-  "student_id, starts_at, ends_at, status, category, base_category, prev_starts, prev_ends, settled";
+  "student_id, starts_at, ends_at, status, base_category, origin_starts_at, origin_ends_at, settled";
 
 export default async function AdminDashboard({
   searchParams,
@@ -50,8 +50,12 @@ export default async function AdminDashboard({
       supabase
         .from("schedules")
         .select(BILLING_COLS)
-        .gte("starts_at", kstMonthStartISO(prevY, prevM))
-        .lt("starts_at", kstMonthStartISO(nextY, nextM)),
+        // 정규시간은 '계획된 달'(origin) 기준이므로, 다른 달로 옮겨진 수업도
+        // 계획된 달의 정산에 잡히도록 origin 기준 범위를 함께 조회한다
+        .or(
+          `and(starts_at.gte."${kstMonthStartISO(prevY, prevM)}",starts_at.lt."${kstMonthStartISO(nextY, nextM)}"),` +
+            `and(origin_starts_at.gte."${kstMonthStartISO(prevY, prevM)}",origin_starts_at.lt."${kstMonthStartISO(nextY, nextM)}")`,
+        ),
       supabase.from("payments").select("student_id").eq("ym", monthYm),
     ]);
   const students = (studentRows ?? []) as Student[];
@@ -98,6 +102,11 @@ export default async function AdminDashboard({
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-2xl font-bold">수업료 정산</h1>
         <div className="ml-auto flex items-center gap-1">
+          {!isCurrent && (
+            <Link href="/admin" className={navBtn}>
+              이번달
+            </Link>
+          )}
           <Link href={`/admin?ym=${ymStr(prevY, prevM)}`} className={navBtn} aria-label="이전 달">
             ‹
           </Link>
@@ -107,11 +116,6 @@ export default async function AdminDashboard({
           <Link href={`/admin?ym=${ymStr(nextY, nextM)}`} className={navBtn} aria-label="다음 달">
             ›
           </Link>
-          {!isCurrent && (
-            <Link href="/admin" className={navBtn}>
-              이번달
-            </Link>
-          )}
         </div>
       </div>
 

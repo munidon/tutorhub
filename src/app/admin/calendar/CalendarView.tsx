@@ -64,6 +64,8 @@ export function CalendarView({
   viewMaxYm,
   changeAction,
   cancelAction,
+  restoreAction,
+  revertAction,
   deleteAction,
   settleAction,
   subscribeAction,
@@ -77,6 +79,8 @@ export function CalendarView({
   viewMaxYm: string;
   changeAction: FormAction;
   cancelAction: FormAction;
+  restoreAction: FormAction;
+  revertAction: FormAction;
   deleteAction: FormAction;
   settleAction: FormAction;
   subscribeAction: SubscribeAction;
@@ -171,6 +175,8 @@ export function CalendarView({
           onMonthChange={handleMonthChange}
           changeAction={changeAction}
           cancelAction={cancelAction}
+          restoreAction={restoreAction}
+          revertAction={revertAction}
           deleteAction={deleteAction}
           settleAction={settleAction}
           changeLabel="시간 변경 저장"
