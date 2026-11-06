@@ -1,0 +1,8 @@
+# Netlify 배포 설정
+# Next.js 런타임(@netlify/plugin-nextjs)은 Netlify가 자동으로 감지·설치한다.
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"
